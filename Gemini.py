@@ -1,6 +1,8 @@
 from dotenv import load_dotenv
 import os
 
+from AISettings import get_model
+
 load_dotenv('AIAPIKEYS.env')
 
 _client = None
@@ -15,10 +17,10 @@ def _get_client():
     return _client
 
 
-def ask_gemini(question: str, max_tokens: int = 1024, model: str = "gemini-3.1-flash-lite") -> str:
-    """Ask Gemini a question and return the response text."""
+def ask_gemini(question: str, max_tokens: int = 1024, model: str | None = None) -> str:
+    """Ask Gemini a question and return the response text. Model defaults to ai_settings.json."""
     response = _get_client().models.generate_content(
-        model=model,
+        model=model or get_model("gemini"),
         contents=question,
         config={"max_output_tokens": max_tokens}
     )

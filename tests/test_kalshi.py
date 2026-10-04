@@ -1,3 +1,4 @@
+import datetime
 import importlib
 import unittest
 from unittest import mock
@@ -99,6 +100,127 @@ class ImportSideEffectTests(unittest.TestCase):
         for module in (ClaudeAi, Gemini, OpenAi):
             importlib.reload(module)
             self.assertIsNone(module._client)
+
+
+# ---------------------------------------------------------------------------
+# NBA games by day (mocked, no network)
+# ---------------------------------------------------------------------------
+
+def game_market(ticker, team, result="", **prices):
+    """A KXNBAGAME market for `ticker` (e.g. KXNBAGAME-26OCT03MIATOR-MIA)."""
+    return {
+        "ticker": ticker,
+        "event_ticker": ticker.rsplit("-", 1)[0],
+        "yes_sub_title": team,
+        "result": result,
+        **prices,
+    }
+
+
+OCT3 = datetime.date(2026, 10, 3)
+OCT4 = datetime.date(2026, 10, 4)
+
+
+class GameDateTests(unittest.TestCase):
+    def test_reads_date_from_event_ticker(self):
+        self.assertEqual(Kalshi.game_date({"event_ticker": "KXNBAGAME-26OCT03MIATOR"}), OCT3)
+
+    def test_falls_back_to_market_ticker(self):
+        self.assertEqual(Kalshi.game_date({"ticker": "KXNBAGAME-26DEC25LALBOS-LAL"}),
+                         datetime.date(2026, 12, 25))
+
+    def test_unparseable_ticker_is_none(self):
+        self.assertIsNone(Kalshi.game_date({"ticker": "KXNBA-26"}))
+        self.assertIsNone(Kalshi.game_date({"ticker": "KXNBAGAME-26XYZ03MIATOR"}))
+        self.assertIsNone(Kalshi.game_date({}))
+
+
+class GamesOnDayTests(unittest.TestCase):
+    MARKETS = [
+        game_market("KXNBAGAME-26OCT03MIATOR-MIA", "Miami", "yes"),
+        game_market("KXNBAGAME-26OCT03MIATOR-TOR", "Toronto", "no"),
+        game_market("KXNBAGAME-26OCT04UTADEN-UTA", "Utah"),
+        game_market("KXNBAGAME-26OCT04UTADEN-DEN", "Denver"),
+    ]
+
+    def test_keeps_only_that_days_games(self):
+        with mock.patch.object(Kalshi, "get_all_markets", return_value=self.MARKETS):
+            games = Kalshi.get_nba_games_on(OCT4)
+        self.assertEqual([m["ticker"] for m in games],
+                         ["KXNBAGAME-26OCT04UTADEN-UTA", "KXNBAGAME-26OCT04UTADEN-DEN"])
+
+    def test_queries_the_game_series_bounded_by_close_time(self):
+        with mock.patch.object(Kalshi, "get_all_markets", return_value=[]) as get_all:
+            Kalshi.get_nba_games_on(OCT4)
+        kwargs = get_all.call_args.kwargs
+        self.assertEqual(kwargs["market"], Kalshi.NBA_GAME_SERIES)
+        self.assertIsNone(kwargs["status"])  # finished games today still count
+        since = datetime.datetime.fromtimestamp(kwargs["min_close_ts"])
+        self.assertLessEqual(since.date(), OCT4)
+
+    def test_todays_games_uses_the_given_day(self):
+        with mock.patch.object(Kalshi, "get_nba_games_on", return_value=[]) as on_day:
+            Kalshi.get_todays_nba_games(today=OCT4)
+        on_day.assert_called_once_with(OCT4)
+
+    def test_min_close_ts_is_sent_to_the_api(self):
+        response = mock.Mock(**{"json.return_value": {"markets": []}})
+        with mock.patch("requests.get", return_value=response) as get:
+            Kalshi.get_markets(series_ticker="KXNBAGAME", min_close_ts=123)
+        self.assertEqual(get.call_args.kwargs["params"]["min_close_ts"], 123)
+
+
+class CurrentOddsTests(unittest.TestCase):
+    def test_returns_fresh_prices_and_implied_probability(self):
+        market = game_market("KXNBAGAME-26OCT04UTADEN-DEN", "Denver",
+                             yes_bid_dollars="0.60", yes_ask_dollars="0.62", last_price_dollars="0.61")
+        with mock.patch.object(Kalshi, "get_market", return_value=market) as get:
+            odds = Kalshi.get_current_odds("KXNBAGAME-26OCT04UTADEN-DEN")
+
+        get.assert_called_once_with("KXNBAGAME-26OCT04UTADEN-DEN")
+        self.assertEqual(odds["team"], "Denver")
+        self.assertAlmostEqual(odds["yes_ask"], 0.62)
+        self.assertAlmostEqual(odds["no_ask"], 0.40)  # 1 - yes_bid
+        self.assertAlmostEqual(odds["implied_prob"], 0.61)
+
+    def test_market_without_prices_raises(self):
+        with mock.patch.object(Kalshi, "get_market", return_value={"ticker": "X"}):
+            with self.assertRaises(ValueError):
+                Kalshi.get_current_odds("X")
+
+
+class ResultsTests(unittest.TestCase):
+    def test_one_result_per_finished_game(self):
+        markets = [
+            game_market("KXNBAGAME-26OCT03MIATOR-MIA", "Miami", "yes"),
+            game_market("KXNBAGAME-26OCT03MIATOR-TOR", "Toronto", "no"),
+            game_market("KXNBAGAME-26OCT03BOSNYK-BOS", "Boston", "no"),
+            game_market("KXNBAGAME-26OCT03BOSNYK-NYK", "New York", "yes"),
+        ]
+        with mock.patch.object(Kalshi, "get_nba_games_on", return_value=markets):
+            results = Kalshi.get_nba_results(OCT3)
+        self.assertEqual(results, [
+            {"event_ticker": "KXNBAGAME-26OCT03MIATOR", "winner": "Miami", "loser": "Toronto"},
+            {"event_ticker": "KXNBAGAME-26OCT03BOSNYK", "winner": "New York", "loser": "Boston"},
+        ])
+
+    def test_unfinished_games_are_left_out(self):
+        markets = [
+            game_market("KXNBAGAME-26OCT03MIATOR-MIA", "Miami"),
+            game_market("KXNBAGAME-26OCT03MIATOR-TOR", "Toronto"),
+        ]
+        with mock.patch.object(Kalshi, "get_nba_games_on", return_value=markets):
+            self.assertEqual(Kalshi.get_nba_results(OCT3), [])
+
+    def test_yesterday_is_the_day_before_today(self):
+        with mock.patch.object(Kalshi, "get_nba_results", return_value=[]) as results:
+            Kalshi.get_yesterdays_nba_results(today=OCT4)
+        results.assert_called_once_with(OCT3)
+
+    def test_yesterday_across_a_month_boundary(self):
+        with mock.patch.object(Kalshi, "get_nba_results", return_value=[]) as results:
+            Kalshi.get_yesterdays_nba_results(today=datetime.date(2026, 11, 1))
+        results.assert_called_once_with(datetime.date(2026, 10, 31))
 
 
 if __name__ == "__main__":

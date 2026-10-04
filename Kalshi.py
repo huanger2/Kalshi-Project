@@ -1,6 +1,7 @@
 import base64
 import datetime
 import os
+import re
 from typing import Optional
 
 import requests
@@ -147,7 +148,7 @@ def implied_yes_prob(market: dict) -> float:
 # API calls (nothing here runs at import time)
 # ---------------------------------------------------------------------------
 
-def get_markets(limit=100, cursor=None, status=None, series_ticker=None):
+def get_markets(limit=100, cursor=None, status=None, series_ticker=None, min_close_ts=None):
     params = {"limit": limit}
     if cursor:
         params["cursor"] = cursor
@@ -155,6 +156,8 @@ def get_markets(limit=100, cursor=None, status=None, series_ticker=None):
         params["status"] = status  # "open", "closed", "settled"
     if series_ticker:
         params["series_ticker"] = series_ticker
+    if min_close_ts:
+        params["min_close_ts"] = min_close_ts  # unix seconds
 
     response = requests.get(f"{BASE}/markets", params=params, timeout=30)
     response.raise_for_status()
@@ -167,13 +170,15 @@ def get_all_series():
     return response.json()
 
 
-def get_all_markets(market=None, status="open"):
+def get_all_markets(market=None, status="open", min_close_ts=None):
     """Return every market in a series, following pagination cursors."""
     markets = []
     cursor = None
 
     while True:
-        data = get_markets(limit=200, cursor=cursor, status=status, series_ticker=market)
+        data = get_markets(
+            limit=200, cursor=cursor, status=status, series_ticker=market, min_close_ts=min_close_ts
+        )
         markets.extend(data["markets"])
 
         cursor = data.get("cursor")
@@ -200,6 +205,80 @@ def get_market_result(market: dict) -> Optional[bool]:
     if result == "no":
         return False
     return None
+
+
+# ---------------------------------------------------------------------------
+# NBA games by day
+# ---------------------------------------------------------------------------
+
+_TICKER_DATE = re.compile(r"^[A-Z]+-(\d{2})([A-Z]{3})(\d{2})")
+_MONTHS = {m: i for i, m in enumerate(
+    ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"], 1)}
+
+
+def game_date(market: dict) -> Optional[datetime.date]:
+    """
+    The scheduled (US) date of the game, read from the ticker.
+
+    KXNBAGAME-26OCT03MIATOR is the Oct 3, 2026 game. occurrence_datetime is not
+    used because it is UTC, which puts evening games on the following day.
+    """
+    match = _TICKER_DATE.match(market.get("event_ticker") or market.get("ticker") or "")
+    if not match or match.group(2) not in _MONTHS:
+        return None
+    yy, mon, dd = match.groups()
+    return datetime.date(2000 + int(yy), _MONTHS[mon], int(dd))
+
+
+def get_nba_games_on(day: datetime.date, status=None) -> list[dict]:
+    """Every KXNBAGAME market (one per team) for games scheduled on `day`."""
+    # A game's market closes after the game ends, so nothing from `day` closes
+    # before it; the extra day of slack covers time zones. This keeps the
+    # query from paging through every past game.
+    since = datetime.datetime.combine(day - datetime.timedelta(days=1), datetime.time())
+    markets = get_all_markets(
+        market=NBA_GAME_SERIES, status=status, min_close_ts=int(since.timestamp())
+    )
+    return [m for m in markets if game_date(m) == day]
+
+
+def get_todays_nba_games(today: Optional[datetime.date] = None) -> list[dict]:
+    """Markets for today's NBA games (open, live or already finished)."""
+    return get_nba_games_on(today or datetime.date.today())
+
+
+def get_current_odds(ticker: str) -> dict:
+    """
+    Fetch a market fresh from Kalshi and return its current odds:
+    ticker, team, yes_bid, yes_ask, no_bid, no_ask, last, implied_prob.
+    """
+    market = get_market(ticker)
+    return {
+        "ticker": market["ticker"],
+        "team": market.get("yes_sub_title"),
+        **get_prices(market),
+        "implied_prob": implied_yes_prob(market),
+    }
+
+
+def get_nba_results(day: datetime.date) -> list[dict]:
+    """
+    Final results for the games on `day`, one dict per game:
+    event_ticker, winner, loser (team names). Unfinished games are left out.
+    """
+    games: dict[str, dict] = {}
+    for market in get_nba_games_on(day):
+        won = get_market_result(market)
+        if won is None:
+            continue
+        game = games.setdefault(market["event_ticker"], {"event_ticker": market["event_ticker"]})
+        game["winner" if won else "loser"] = market.get("yes_sub_title")
+    return [g for g in games.values() if "winner" in g]
+
+
+def get_yesterdays_nba_results(today: Optional[datetime.date] = None) -> list[dict]:
+    """Final results for yesterday's NBA games."""
+    return get_nba_results((today or datetime.date.today()) - datetime.timedelta(days=1))
 
 
 if __name__ == "__main__":

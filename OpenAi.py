@@ -2,6 +2,8 @@ from openai import OpenAI
 from dotenv import load_dotenv
 import os
 
+from AISettings import get_model
+
 load_dotenv('AIAPIKEYS.env')
 
 _client = None
@@ -15,10 +17,10 @@ def _get_client():
     return _client
 
 
-def ask_openai(question: str) -> str:
-    """Ask OpenAI a question and return the response text."""
+def ask_openai(question: str, model: str | None = None) -> str:
+    """Ask OpenAI a question and return the response text. Model defaults to ai_settings.json."""
     response = _get_client().chat.completions.create(
-        model="gpt-4.1-mini",
+        model=model or get_model("openai"),
         messages=[
             {"role": "user", "content": question}
         ]
