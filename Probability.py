@@ -9,6 +9,7 @@ to determine whether the market is worth betting on.
 import re
 from typing import Callable, Optional
 
+import Notifier
 from EVCalculator import EVCalculator, LLMPrediction
 from Kalshi import NBA_GAME_SERIES, get_all_markets, get_prices, implied_yes_prob
 
@@ -103,7 +104,12 @@ def query_llms(
     llms: list[tuple[str, Callable[[str], str]]],
     verbose: bool = True,
 ) -> list[LLMPrediction]:
-    """Ask each LLM about the market; LLMs that error or reply unparseably are skipped."""
+    """
+    Ask each LLM about the market; LLMs that error or reply unparseably are skipped.
+
+    An error that looks like a billing/quota failure also triggers an email
+    alert (see Notifier.py), once per LLM per process run.
+    """
     prompt = build_prompt(market)
     predictions: list[LLMPrediction] = []
 
@@ -123,6 +129,8 @@ def query_llms(
             )
         except Exception as e:
             print(f"[{llm_name}] ERROR — skipping: {e}")
+            if Notifier.is_insufficient_funds_error(e):
+                Notifier.notify_insufficient_funds(llm_name, e, context=market.get("title"))
 
     return predictions
 

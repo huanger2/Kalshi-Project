@@ -1,7 +1,9 @@
 import contextlib
 import io
 import unittest
+from unittest import mock
 
+import Notifier
 import Probability
 import Tracker
 from Probability import (
@@ -10,6 +12,7 @@ from Probability import (
     entry_price,
     one_market_per_event,
     parse_response,
+    query_llms,
 )
 
 MARKET = {
@@ -159,6 +162,36 @@ class AnalyzeMarketTests(unittest.TestCase):
     def test_nothing_is_recorded_without_a_db(self):
         # Just makes sure the db_conn=None path doesn't need Tracker at all.
         self.run_quiet(llms=[("A", fake("Probability: 80%\nConfidence: 90%"))])
+
+
+def out_of_funds(prompt):
+    raise RuntimeError("insufficient_quota: please check your plan and billing details")
+
+
+class QueryLlmsNotifierHookupTests(unittest.TestCase):
+    def setUp(self):
+        Notifier._notified.clear()
+        self.addCleanup(Notifier._notified.clear)
+
+    def run_quiet(self, **kwargs):
+        with contextlib.redirect_stdout(io.StringIO()):
+            return query_llms(MARKET, verbose=False, **kwargs)
+
+    def test_billing_error_triggers_an_alert(self):
+        with mock.patch.object(Notifier, "notify_insufficient_funds") as notify:
+            self.run_quiet(llms=[("OpenAI", out_of_funds)])
+        notify.assert_called_once()
+        self.assertEqual(notify.call_args[0][0], "OpenAI")
+
+    def test_unrelated_error_does_not_trigger_an_alert(self):
+        with mock.patch.object(Notifier, "notify_insufficient_funds") as notify:
+            self.run_quiet(llms=[("Down", boom)])
+        notify.assert_not_called()
+
+    def test_unparseable_reply_does_not_trigger_an_alert(self):
+        with mock.patch.object(Notifier, "notify_insufficient_funds") as notify:
+            self.run_quiet(llms=[("Rambler", fake("no idea"))])
+        notify.assert_not_called()
 
 
 if __name__ == "__main__":

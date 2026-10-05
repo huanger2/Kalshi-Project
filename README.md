@@ -81,6 +81,55 @@ Notes:
 - Close the day's file in Excel before running, or the script stops and asks you to.
 - `daily_logs/` is gitignored because it is generated data.
 
+### Running it automatically every morning
+
+[`schedule_task.ps1`](schedule_task.ps1) registers a Windows Task Scheduler
+task that runs `DailyLog.py` once a day, so nothing has to stay open:
+
+```powershell
+.\schedule_task.ps1               # creates/updates it, runs daily at 09:00
+.\schedule_task.ps1 -Time "07:30" # a different time
+.\schedule_task.ps1 -Uninstall    # remove it
+```
+
+It runs `py.exe DailyLog.py` with this project folder as the working
+directory, so `AIAPIKEYS.env`, `EmailAlerts.env`, `ai_settings.json`,
+`predictions.db` and `daily_logs/` all resolve exactly as they do when you
+run it by hand. View or edit the task in Task Scheduler (`taskschd.msc`),
+under Task Scheduler Library as `KalshiNBA-DailyLog`.
+
+This only runs while you're logged in, which covers a personal machine
+that's normally on. To also run while logged off: open Task Scheduler, find
+the task, Properties > General > "Run whether user is logged on or not",
+and enter your password when prompted.
+
+## Email alerts when an AI runs out of funds
+
+[`Notifier.py`](Notifier.py) emails you whenever an AI API call fails with
+what looks like a billing problem -- quota exhausted, credit balance too
+low, billing not enabled -- rather than letting it silently scroll by in an
+unattended overnight run. It hooks into `query_llms` in `Probability.py`,
+so it covers `DailyLog.py`, `Collect.py` and `Probability.py` alike. One
+email per AI per run, even if many games are queried.
+
+Credentials live in `EmailAlerts.env`, a separate file from `AIAPIKEYS.env`,
+also gitignored:
+
+```
+EMAIL_ADDRESS=you@gmail.com
+EMAIL_APP_PASSWORD=
+ALERT_EMAIL_TO=you@gmail.com
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+```
+
+`EMAIL_APP_PASSWORD` must be a Gmail **App Password**, not your normal
+Google password: turn on
+[2-Step Verification](https://myaccount.google.com/signinoptions/two-step-verification),
+then generate one at <https://myaccount.google.com/apppasswords> and paste
+the 16 characters in with no spaces. Without it, `Notifier` prints a warning
+and skips sending instead of crashing the pipeline.
+
 ## Other tools
 
 | Command | What it does |
@@ -103,6 +152,8 @@ Notes:
 | `Probability.py` | Builds the prompt, parses AI replies, runs the EV analysis |
 | `EVCalculator.py` | Confidence-weighted expected-value score vs. the market price |
 | `Tracker.py`, `Export.py`, `Collect.py` | SQLite prediction tracking, accuracy weights, Excel export |
+| `Notifier.py` | Emails an alert when an AI API call looks like a billing/quota failure |
+| `schedule_task.ps1` | Registers the Windows Task Scheduler task that runs `DailyLog.py` daily |
 
 ## Tests
 
