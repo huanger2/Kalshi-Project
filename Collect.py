@@ -7,10 +7,14 @@ Command-line workflow for accumulating LLM accuracy data.
     py Collect.py settle             fetch results for finished games from Kalshi
     py Collect.py weights            print each LLM's accuracy and its 0-1 weight
     py Collect.py export [out.xlsx]  dump every prediction + the summary above to Excel
+    py Collect.py usage              print each AI's logged token usage/estimated spend
+    py Collect.py costs [out.xlsx]   dump logged API token usage/spend to its own Excel file
 """
 
 import sys
 
+import CostExport
+import CostTracker
 import Export
 import Tracker
 from Kalshi import NBA_GAME_SERIES, get_all_markets
@@ -55,6 +59,18 @@ def show_weights(db_path: str = Tracker.DEFAULT_DB) -> None:
             print(f"{llm:<10} {0:>8} {'-':>8} {'-':>8} {weight:>8.2f}")
 
 
+def show_costs(db_path: str = Tracker.DEFAULT_DB) -> None:
+    rows = CostTracker.usage_summary(db_path)
+    if not rows:
+        print("no API usage logged yet")
+        return
+    print(f"{'Provider':<10} {'calls':>6} {'in tok':>10} {'out tok':>10} {'cost $':>10} {'unpriced':>9}")
+    for r in rows:
+        cost = "unknown" if r["cost_usd"] is None else f"{r['cost_usd']:.4f}"
+        print(f"{r['provider']:<10} {r['calls']:>6} {r['input_tokens']:>10} {r['output_tokens']:>10} "
+              f"{cost:>10} {r['unpriced_calls']:>9}")
+
+
 if __name__ == "__main__":
     command = sys.argv[1] if len(sys.argv) > 1 else "collect"
     if command == "collect":
@@ -66,6 +82,12 @@ if __name__ == "__main__":
     elif command == "export":
         out = sys.argv[2] if len(sys.argv) > 2 else Export.DEFAULT_OUT
         path = Export.export_to_excel(out_path=out)
+        print(f"wrote {path}")
+    elif command == "usage":
+        show_costs()
+    elif command == "costs":
+        out = sys.argv[2] if len(sys.argv) > 2 else CostExport.DEFAULT_OUT
+        path = CostExport.export_to_excel(out_path=out)
         print(f"wrote {path}")
     else:
         sys.exit(__doc__)

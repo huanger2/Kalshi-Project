@@ -90,6 +90,40 @@ class ClaudeAiTests(ResetClientMixin, unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 ClaudeAi.ask_claude("q")
 
+    def test_usage_is_recorded_when_the_response_has_it(self):
+        client = mock.Mock()
+        usage = SimpleNamespace(prompt_tokens=11, completion_tokens=22)
+        client.chat.completions.create.return_value = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))], usage=usage
+        )
+        with mock.patch.object(ClaudeAi, "_get_client", return_value=client), \
+             mock.patch.object(ClaudeAi, "get_model", return_value="configured-model"), \
+             mock.patch("CostTracker.record_usage") as record:
+            ClaudeAi.ask_claude("Will it rain?")
+        record.assert_called_once_with(
+            provider="Claude", model="configured-model", input_tokens=11, output_tokens=22,
+            context="Will it rain?",
+        )
+
+    def test_missing_usage_does_not_record_anything(self):
+        client = mock.Mock()
+        client.chat.completions.create.return_value = chat_completion("ok")  # no .usage attribute
+        with mock.patch.object(ClaudeAi, "_get_client", return_value=client), \
+             mock.patch("CostTracker.record_usage") as record:
+            ClaudeAi.ask_claude("q")
+        record.assert_not_called()
+
+    def test_cost_tracker_failure_does_not_break_the_call(self):
+        client = mock.Mock()
+        usage = SimpleNamespace(prompt_tokens=1, completion_tokens=1)
+        client.chat.completions.create.return_value = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))], usage=usage
+        )
+        with mock.patch.object(ClaudeAi, "_get_client", return_value=client), \
+             mock.patch("CostTracker.record_usage", side_effect=RuntimeError("db locked")):
+            result = ClaudeAi.ask_claude("q")
+        self.assertEqual(result, "ok")
+
 
 class OpenAiTests(ResetClientMixin, unittest.TestCase):
     module = OpenAi
@@ -132,6 +166,40 @@ class OpenAiTests(ResetClientMixin, unittest.TestCase):
         with mock.patch.object(OpenAi, "_get_client", return_value=client):
             with self.assertRaises(RuntimeError):
                 OpenAi.ask_openai("q")
+
+    def test_usage_is_recorded_when_the_response_has_it(self):
+        client = mock.Mock()
+        usage = SimpleNamespace(prompt_tokens=11, completion_tokens=22)
+        client.chat.completions.create.return_value = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))], usage=usage
+        )
+        with mock.patch.object(OpenAi, "_get_client", return_value=client), \
+             mock.patch.object(OpenAi, "get_model", return_value="configured-model"), \
+             mock.patch("CostTracker.record_usage") as record:
+            OpenAi.ask_openai("Will it rain?")
+        record.assert_called_once_with(
+            provider="OpenAI", model="configured-model", input_tokens=11, output_tokens=22,
+            context="Will it rain?",
+        )
+
+    def test_missing_usage_does_not_record_anything(self):
+        client = mock.Mock()
+        client.chat.completions.create.return_value = chat_completion("ok")  # no .usage attribute
+        with mock.patch.object(OpenAi, "_get_client", return_value=client), \
+             mock.patch("CostTracker.record_usage") as record:
+            OpenAi.ask_openai("q")
+        record.assert_not_called()
+
+    def test_cost_tracker_failure_does_not_break_the_call(self):
+        client = mock.Mock()
+        usage = SimpleNamespace(prompt_tokens=1, completion_tokens=1)
+        client.chat.completions.create.return_value = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))], usage=usage
+        )
+        with mock.patch.object(OpenAi, "_get_client", return_value=client), \
+             mock.patch("CostTracker.record_usage", side_effect=RuntimeError("db locked")):
+            result = OpenAi.ask_openai("q")
+        self.assertEqual(result, "ok")
 
 
 class GeminiTests(ResetClientMixin, unittest.TestCase):
@@ -178,6 +246,36 @@ class GeminiTests(ResetClientMixin, unittest.TestCase):
         with mock.patch.object(Gemini, "_get_client", return_value=client):
             with self.assertRaises(RuntimeError):
                 Gemini.ask_gemini("q")
+
+    def test_usage_is_recorded_when_the_response_has_it(self):
+        client = mock.Mock()
+        usage = SimpleNamespace(prompt_token_count=5, candidates_token_count=7)
+        client.models.generate_content.return_value = SimpleNamespace(text="ok", usage_metadata=usage)
+        with mock.patch.object(Gemini, "_get_client", return_value=client), \
+             mock.patch.object(Gemini, "get_model", return_value="configured-model"), \
+             mock.patch("CostTracker.record_usage") as record:
+            Gemini.ask_gemini("Will it rain?")
+        record.assert_called_once_with(
+            provider="Gemini", model="configured-model", input_tokens=5, output_tokens=7,
+            context="Will it rain?",
+        )
+
+    def test_missing_usage_metadata_does_not_record_anything(self):
+        client = mock.Mock()
+        client.models.generate_content.return_value = SimpleNamespace(text="ok")  # no usage_metadata
+        with mock.patch.object(Gemini, "_get_client", return_value=client), \
+             mock.patch("CostTracker.record_usage") as record:
+            Gemini.ask_gemini("q")
+        record.assert_not_called()
+
+    def test_cost_tracker_failure_does_not_break_the_call(self):
+        client = mock.Mock()
+        usage = SimpleNamespace(prompt_token_count=1, candidates_token_count=1)
+        client.models.generate_content.return_value = SimpleNamespace(text="ok", usage_metadata=usage)
+        with mock.patch.object(Gemini, "_get_client", return_value=client), \
+             mock.patch("CostTracker.record_usage", side_effect=RuntimeError("db locked")):
+            result = Gemini.ask_gemini("q")
+        self.assertEqual(result, "ok")
 
 
 class AICentralTests(unittest.TestCase):

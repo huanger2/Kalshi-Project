@@ -130,6 +130,41 @@ then generate one at <https://myaccount.google.com/apppasswords> and paste
 the 16 characters in with no spaces. Without it, `Notifier` prints a warning
 and skips sending instead of crashing the pipeline.
 
+## Tracking API spend
+
+None of OpenAI, Anthropic or Gemini expose a "remaining balance" through a
+normal API key -- that only shows in their web consoles (and a real
+per-request cost figure from OpenAI/Anthropic needs a separate Admin/
+Organization API key; Gemini has nothing comparable at all). Instead,
+[`CostTracker.py`](CostTracker.py) reads the token counts every API response
+already reports and multiplies them by a price you supply -- the same math
+their billing is based on.
+
+Fill in [`model_pricing.json`](model_pricing.json) with each model's *current*
+price from its provider's own pricing page, in USD per 1,000,000 tokens --
+prices change, and the numbers below are just the shape of the file, not
+real quotes:
+
+```json
+{
+    "models": {
+        "claude-sonnet-5-5": {"input_per_million": null, "output_per_million": null},
+        "gpt-4.1-mini": {"input_per_million": null, "output_per_million": null},
+        "gemini-3.1-flash-lite": {"input_per_million": null, "output_per_million": null}
+    }
+}
+```
+
+A model left out, or still `null` as it ships, records its token counts
+with an **unknown** cost rather than silently assuming $0. Every call to
+`ask_openai` / `ask_claude` / `ask_gemini` logs its usage automatically; a
+logging failure prints a warning instead of breaking the AI call.
+
+| Command | What it does |
+|---|---|
+| `python Collect.py usage` | Print each AI's logged token usage and estimated spend |
+| `python Collect.py costs [file.xlsx]` | Export logged API usage/spend to its own Excel file (`api_costs.xlsx` by default) |
+
 ## Other tools
 
 | Command | What it does |
@@ -153,6 +188,7 @@ and skips sending instead of crashing the pipeline.
 | `EVCalculator.py` | Confidence-weighted expected-value score vs. the market price |
 | `Tracker.py`, `Export.py`, `Collect.py` | SQLite prediction tracking, accuracy weights, Excel export |
 | `Notifier.py` | Emails an alert when an AI API call looks like a billing/quota failure |
+| `CostTracker.py`, `CostExport.py`, `model_pricing.json` | Token-based API spend estimate and Excel export |
 | `schedule_task.ps1` | Registers the Windows Task Scheduler task that runs `DailyLog.py` daily |
 
 ## Tests
