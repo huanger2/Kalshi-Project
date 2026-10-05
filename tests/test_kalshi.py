@@ -1,5 +1,6 @@
 import datetime
 import importlib
+import os
 import unittest
 from unittest import mock
 
@@ -88,6 +89,30 @@ class PaginationTests(unittest.TestCase):
         self.assertEqual([m["ticker"] for m in markets], ["A", "B", "C"])
         self.assertEqual(get.call_args_list[1].kwargs["cursor"], "next")
         self.assertEqual(get.call_args_list[0].kwargs["series_ticker"], "KXNBAGAME")
+
+
+class AuthHeaderTests(unittest.TestCase):
+    """get_auth_headers() had no coverage before the whitespace-stripping fix."""
+
+    def test_bearer_key_builds_authorization_header(self):
+        with mock.patch.dict(os.environ, {"KALSHI_API_KEY": "secret", "KALSHI_API_KEY_ID": "key-id"}), \
+             mock.patch.object(Kalshi, "load_dotenv"):
+            headers = Kalshi.get_auth_headers("GET", "/markets")
+        self.assertEqual(headers, {"Authorization": "Bearer secret", "KALSHI-ACCESS-KEY": "key-id"})
+
+    def test_whitespace_is_stripped_from_the_key_and_key_id(self):
+        # Regression: a trailing newline (e.g. from a stale OS-level env var
+        # shadowing AIAPIKEYS.env) breaks the Authorization header outright.
+        with mock.patch.dict(os.environ, {"KALSHI_API_KEY": "secret\n\n", "KALSHI_API_KEY_ID": "key-id\n\n"}), \
+             mock.patch.object(Kalshi, "load_dotenv"):
+            headers = Kalshi.get_auth_headers("GET", "/markets")
+        self.assertEqual(headers, {"Authorization": "Bearer secret", "KALSHI-ACCESS-KEY": "key-id"})
+
+    def test_env_var_is_loaded_with_override_so_a_stale_os_value_cannot_win(self):
+        with mock.patch.object(Kalshi, "load_dotenv") as load_dotenv:
+            with mock.patch.dict(os.environ, {"KALSHI_API_KEY": "secret"}):
+                Kalshi.get_auth_headers("GET", "/markets")
+        load_dotenv.assert_called_once_with("AIAPIKEYS.env", override=True)
 
 
 class ImportSideEffectTests(unittest.TestCase):

@@ -67,12 +67,17 @@ def send_email(subject: str, body: str, to: str | None = None) -> bool:
     Returns True on success. Never raises -- a broken alert shouldn't crash
     the pipeline it's trying to warn about; failures are printed instead.
     """
-    load_dotenv(ENV_FILE)
-    sender = os.getenv("EMAIL_ADDRESS")
-    password = os.getenv("EMAIL_APP_PASSWORD")
-    recipient = to or os.getenv("ALERT_EMAIL_TO") or sender
-    host = os.getenv("SMTP_HOST", "smtp.gmail.com")
-    port = int(os.getenv("SMTP_PORT", "587"))
+    # override=True: EmailAlerts.env must win over a stale OS-level env var of
+    # the same name, which load_dotenv() otherwise silently leaves in place.
+    load_dotenv(ENV_FILE, override=True)
+    # .strip(): trailing whitespace/newlines (a stray OS env var, or a
+    # copy-paste artifact in the .env file) would otherwise send a wrong
+    # password or recipient address without any obvious error.
+    sender = (os.getenv("EMAIL_ADDRESS") or "").strip() or None
+    password = (os.getenv("EMAIL_APP_PASSWORD") or "").strip() or None
+    recipient = to or (os.getenv("ALERT_EMAIL_TO") or "").strip() or sender
+    host = os.getenv("SMTP_HOST", "smtp.gmail.com").strip()
+    port = int(os.getenv("SMTP_PORT", "587").strip())
 
     if not sender or not password or not recipient:
         print(f"[Notifier] can't send alert -- {ENV_FILE} is missing EMAIL_ADDRESS / "

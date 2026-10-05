@@ -58,6 +58,16 @@ class ClaudeAiTests(ResetClientMixin, unittest.TestCase):
         self.assertIs(first, second)
         openai_cls.assert_called_once()
 
+    def test_client_strips_whitespace_from_the_key(self):
+        # Regression: a trailing newline (e.g. from a stale OS-level env var
+        # shadowing AIAPIKEYS.env) breaks the Authorization header outright.
+        with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-ant-test\n\n"}), \
+             mock.patch.object(ClaudeAi, "OpenAI") as openai_cls:
+            ClaudeAi._get_client()
+        openai_cls.assert_called_once_with(
+            api_key="sk-ant-test", base_url="https://api.anthropic.com/v1"
+        )
+
     def test_ask_claude_sends_question_and_returns_text(self):
         client = mock.Mock()
         client.chat.completions.create.return_value = chat_completion("Probability: 60%")
@@ -138,6 +148,14 @@ class OpenAiTests(ResetClientMixin, unittest.TestCase):
             self.assertIs(OpenAi._get_client(), OpenAi._get_client())
         openai_cls.assert_called_once()
 
+    def test_client_strips_whitespace_from_the_key(self):
+        # Regression: a trailing newline (e.g. from a stale OS-level env var
+        # shadowing AIAPIKEYS.env) breaks the Authorization header outright.
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test\n\n"}), \
+             mock.patch.object(OpenAi, "OpenAI") as openai_cls:
+            OpenAi._get_client()
+        openai_cls.assert_called_once_with(api_key="sk-test")
+
     def test_ask_openai_sends_question_and_returns_text(self):
         client = mock.Mock()
         client.chat.completions.create.return_value = chat_completion("Confidence: 40%")
@@ -214,6 +232,14 @@ class GeminiTests(ResetClientMixin, unittest.TestCase):
         with mock.patch("google.genai.Client") as client_cls:
             self.assertIs(Gemini._get_client(), Gemini._get_client())
         client_cls.assert_called_once()
+
+    def test_client_strips_whitespace_from_the_key(self):
+        # Regression: a trailing newline (e.g. from a stale OS-level env var
+        # shadowing AIAPIKEYS.env) breaks requests outright.
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": "gm-test\n\n"}), \
+             mock.patch("google.genai.Client") as client_cls:
+            Gemini._get_client()
+        client_cls.assert_called_once_with(api_key="gm-test")
 
     def test_ask_gemini_sends_question_and_returns_text(self):
         client = mock.Mock()

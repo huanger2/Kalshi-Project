@@ -281,6 +281,62 @@ class OldLayoutTests(DailyLogTestCase):
         self.assertEqual(openpyxl.load_workbook(self.path)["Daily log"]["A2"].value, "Game date")
 
 
+class BackfillTests(DailyLogTestCase):
+    def market_lookup(self):
+        """fetch_market stand-in: looks a ticker up in TODAY_MARKETS instead of hitting Kalshi."""
+        return lambda ticker: next(m for m in TODAY_MARKETS if m["ticker"] == ticker)
+
+    def test_fills_in_only_the_missing_llms_cells(self):
+        def broken(prompt):
+            raise RuntimeError("API down")
+
+        llms = [("OpenAI", broken), ("Claude", fake_llm(65, 60)), ("Gemini", fake_llm(55, 50))]
+        two_games = [TODAY_MARKETS[0], TODAY_MARKETS[2]]  # Denver and Golden State -- different events
+        self.run_day(OCT4, two_games, llms=llms)  # OpenAI blank for both games
+
+        n = DailyLog.backfill_missing_predictions(
+            OCT4, self.folder, llms=[("OpenAI", fake_llm(80, 90))], fetch_market=self.market_lookup(),
+        )
+
+        self.assertEqual(n, 2)
+        df = self.sheet(OCT4)
+        self.assertTrue((df["openai_prob"] == 0.80).all())
+        self.assertTrue((df["openai_confidence"] == 0.90).all())
+        self.assertAlmostEqual(df.iloc[0]["claude_prob"], 0.65)  # untouched
+
+    def test_does_nothing_when_nothing_is_missing(self):
+        self.run_day(OCT4, TODAY_MARKETS[:2])  # every AI succeeds
+        n = DailyLog.backfill_missing_predictions(OCT4, self.folder)
+        self.assertEqual(n, 0)
+
+    def test_a_missing_day_file_is_a_no_op(self):
+        n = DailyLog.backfill_missing_predictions(OCT4, self.folder)
+        self.assertEqual(n, 0)
+
+    def test_a_still_failing_llm_leaves_the_cell_blank_and_is_reported(self):
+        def broken(prompt):
+            raise RuntimeError("API down")
+
+        self.run_day(OCT4, TODAY_MARKETS[:1], llms=[
+            ("OpenAI", broken), ("Claude", fake_llm(65, 60)), ("Gemini", fake_llm(55, 50)),
+        ])
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            n = DailyLog.backfill_missing_predictions(
+                OCT4, self.folder, llms=[("OpenAI", broken)], fetch_market=self.market_lookup(),
+            )
+
+        self.assertEqual(n, 0)
+        self.assertTrue(pd.isna(self.sheet(OCT4).iloc[0]["openai_prob"]))
+
+    def test_rows_that_are_already_filled_in_are_not_refetched(self):
+        self.run_day(OCT4, TODAY_MARKETS[:2])  # every AI already succeeded
+        fetch = mock.Mock()
+        n = DailyLog.backfill_missing_predictions(OCT4, self.folder, llms=[("OpenAI", fake_llm(1, 1))], fetch_market=fetch)
+        self.assertEqual(n, 0)
+        fetch.assert_not_called()
+
+
 class CostExportIntegrationTests(DailyLogTestCase):
     def test_cost_spreadsheet_is_refreshed_after_every_run(self):
         self.run_day(OCT4, TODAY_MARKETS)

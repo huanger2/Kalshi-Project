@@ -5,7 +5,9 @@ import os
 import CostTracker
 from AISettings import get_model
 
-load_dotenv('AIAPIKEYS.env')
+# override=True: AIAPIKEYS.env must win over a stale OS-level env var of the
+# same name, which load_dotenv() otherwise silently leaves in place.
+load_dotenv('AIAPIKEYS.env', override=True)
 
 _client = None
 
@@ -14,8 +16,11 @@ def _get_client():
     """Create the client on first use so importing this module never needs a key."""
     global _client
     if _client is None:
+        # .strip(): a key with trailing whitespace/newlines (a stray OS env var,
+        # or a copy-paste artifact in the .env file) breaks the Authorization
+        # header outright -- see AIAPIKEYS.env.
         _client = OpenAI(
-            api_key=os.getenv("ANTHROPIC_API_KEY"),
+            api_key=(os.getenv("ANTHROPIC_API_KEY") or "").strip(),
             base_url="https://api.anthropic.com/v1"
         )
     return _client

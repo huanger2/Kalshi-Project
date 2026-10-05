@@ -18,6 +18,13 @@ Each sheet groups its columns by source (Game, Kalshi odds, each AI, Result)
 under a colored header row, and a 'Column guide' sheet explains every column.
 
     py DailyLog.py [folder]
+    py DailyLog.py backfill [YYYY-MM-DD] [folder]
+
+A game is only retried automatically if *every* AI failed for it; if one AI
+fails while the others succeed, the game is still logged, with that AI's
+cells left permanently blank. `backfill` fixes an already-logged day: for
+each AI with a blank cell, it re-fetches that market and re-queries just
+that AI, leaving everything else untouched.
 """
 
 import datetime
@@ -33,8 +40,8 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 import CostExport
-from Kalshi import get_nba_results, get_prices, get_todays_nba_games, implied_yes_prob
-from Probability import default_llms, query_llms
+from Kalshi import get_market, get_nba_results, get_prices, get_todays_nba_games, implied_yes_prob
+from Probability import build_prompt, default_llms, parse_response, query_llms
 
 DEFAULT_DIR = "daily_logs"
 DEFAULT_LLM_NAMES = ["OpenAI", "Claude", "Gemini"]
@@ -299,6 +306,55 @@ def todays_rows(
     return rows
 
 
+def backfill_missing_predictions(
+    day: datetime.date,
+    folder: str = DEFAULT_DIR,
+    llms: Optional[list[tuple[str, Callable[[str], str]]]] = None,
+    fetch_market=get_market,
+) -> int:
+    """
+    Fill in still-blank AI prediction cells for an already-logged day.
+
+    todays_rows() only retries a game if *every* AI failed for it, so a game
+    where one AI failed and the others succeeded gets logged anyway, leaving
+    that AI's cells permanently blank. This re-fetches the market for each
+    blank cell and re-queries just that AI, leaving every other cell (and
+    every other AI) untouched.
+
+    Returns the number of cells filled in.
+    """
+    llms = llms or default_llms()
+    path = path_for(day, folder)
+    df = load(path)
+    if df.empty:
+        return 0
+
+    filled = 0
+    for llm_name, ask_fn in llms:
+        key = llm_name.lower()
+        prob_col, conf_col = f"{key}_prob", f"{key}_confidence"
+        if prob_col not in df.columns:
+            continue
+
+        for idx in df.index[df[prob_col].isna()]:
+            ticker = df.at[idx, "ticker"]
+            try:
+                prompt = build_prompt(fetch_market(ticker))
+                prob, conf = parse_response(ask_fn(prompt), llm_name)
+            except Exception as e:
+                print(f"[{llm_name}] could not backfill {ticker}: {e}")
+                continue
+            df.at[idx, prob_col] = prob
+            df.at[idx, conf_col] = conf
+            filled += 1
+            print(f"backfilled {llm_name} for {df.at[idx, 'team']} ({ticker}): "
+                  f"{prob:.0%} probability, {conf:.0%} confidence")
+
+    if filled:
+        save(df, path, [name for name, _ in llms])
+    return filled
+
+
 def path_for(day: datetime.date, folder: str = DEFAULT_DIR) -> str:
     """The spreadsheet for one day's games, e.g. daily_logs/2026-10-04.xlsx."""
     return os.path.join(folder, f"{day.isoformat()}.xlsx")
@@ -365,4 +421,10 @@ def run(
 
 
 if __name__ == "__main__":
-    run(sys.argv[1] if len(sys.argv) > 1 else DEFAULT_DIR)
+    if len(sys.argv) > 1 and sys.argv[1] == "backfill":
+        day = datetime.date.fromisoformat(sys.argv[2]) if len(sys.argv) > 2 else datetime.date.today()
+        folder = sys.argv[3] if len(sys.argv) > 3 else DEFAULT_DIR
+        n = backfill_missing_predictions(day, folder)
+        print(f"backfilled {n} cell(s)" if n else "nothing to backfill")
+    else:
+        run(sys.argv[1] if len(sys.argv) > 1 else DEFAULT_DIR)

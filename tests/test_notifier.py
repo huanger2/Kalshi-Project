@@ -87,6 +87,25 @@ class SendEmailTests(unittest.TestCase):
         self.assertEqual(sent_msg["From"], "bot@example.com")
         self.assertEqual(sent_msg["Subject"], "subject")
 
+    def test_whitespace_is_stripped_from_credentials(self):
+        # Regression: a trailing newline (e.g. from a stale OS-level env var
+        # shadowing EmailAlerts.env) would otherwise send a wrong password or
+        # recipient address with no obvious error.
+        smtp = mock.MagicMock()
+        smtp.__enter__.return_value = smtp
+        with mock.patch.dict(
+            "os.environ",
+            {"EMAIL_ADDRESS": "bot@example.com\n\n", "EMAIL_APP_PASSWORD": "secret\n\n"},
+        ), mock.patch("smtplib.SMTP", return_value=smtp):
+            Notifier.send_email("subject", "body")
+        smtp.login.assert_called_once_with("bot@example.com", "secret")
+
+    def test_env_vars_are_loaded_with_override_so_a_stale_os_value_cannot_win(self):
+        with mock.patch("Notifier.load_dotenv") as load_dotenv, \
+             mock.patch("smtplib.SMTP", return_value=mock.MagicMock()):
+            Notifier.send_email("subject", "body")
+        load_dotenv.assert_called_once_with(Notifier.ENV_FILE, override=True)
+
     def test_explicit_to_overrides_alert_email_to(self):
         smtp = mock.MagicMock()
         smtp.__enter__.return_value = smtp

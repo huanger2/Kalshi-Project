@@ -4,7 +4,9 @@ import os
 import CostTracker
 from AISettings import get_model
 
-load_dotenv('AIAPIKEYS.env')
+# override=True: AIAPIKEYS.env must win over a stale OS-level env var of the
+# same name, which load_dotenv() otherwise silently leaves in place.
+load_dotenv('AIAPIKEYS.env', override=True)
 
 _client = None
 
@@ -14,7 +16,9 @@ def _get_client():
     global _client
     if _client is None:
         from google import genai
-        _client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+        # .strip(): a key with trailing whitespace/newlines (a stray OS env var,
+        # or a copy-paste artifact in the .env file) breaks requests outright.
+        _client = genai.Client(api_key=(os.getenv("GEMINI_API_KEY") or "").strip())
     return _client
 
 

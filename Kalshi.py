@@ -56,9 +56,15 @@ def sign_request(private_key, method, path, api_key=None, key_id=None):
 
 def get_auth_headers(method, path):
     """Load credentials from AIAPIKEYS.env lazily and return auth headers."""
-    load_dotenv("AIAPIKEYS.env")
+    # override=True: AIAPIKEYS.env must win over a stale OS-level env var of
+    # the same name, which load_dotenv() otherwise silently leaves in place.
+    load_dotenv("AIAPIKEYS.env", override=True)
+    # .strip(): a key with trailing whitespace/newlines (a stray OS env var, or
+    # a copy-paste artifact in the .env file) breaks the auth header outright.
     api_key = os.getenv("kalshi_api_key") or os.getenv("KALSHI_API_KEY")
+    api_key = api_key.strip() if api_key else api_key
     key_id = os.getenv("kalshi_api_key_id") or os.getenv("KALSHI_API_KEY_ID")
+    key_id = key_id.strip() if key_id else key_id
     private_key = None
     if not api_key:
         private_key = load_private_key(os.getenv("KALSHI_PRIVATE_KEY_PATH", "kalshi.key"))
