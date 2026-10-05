@@ -336,6 +336,30 @@ class BackfillTests(DailyLogTestCase):
         self.assertEqual(n, 0)
         fetch.assert_not_called()
 
+    def test_force_replaces_every_row_even_when_already_filled(self):
+        two_games = [TODAY_MARKETS[0], TODAY_MARKETS[2]]  # different events
+        self.run_day(OCT4, two_games)  # every AI succeeds with the original LLMS fixture
+
+        n = DailyLog.backfill_missing_predictions(
+            OCT4, self.folder, llms=[("Gemini", fake_llm(99, 88))],
+            fetch_market=self.market_lookup(), force=True,
+        )
+
+        self.assertEqual(n, 2)
+        df = self.sheet(OCT4)
+        self.assertTrue((df["gemini_prob"] == 0.99).all())
+        self.assertTrue((df["gemini_confidence"] == 0.88).all())
+        # Untouched: force only applies to the LLMs passed in.
+        self.assertAlmostEqual(df.iloc[0]["claude_prob"], 0.65)
+
+    def test_without_force_an_already_filled_llm_is_left_alone(self):
+        self.run_day(OCT4, TODAY_MARKETS[:2])
+        n = DailyLog.backfill_missing_predictions(
+            OCT4, self.folder, llms=[("Gemini", fake_llm(99, 88))], fetch_market=self.market_lookup(),
+        )
+        self.assertEqual(n, 0)
+        self.assertAlmostEqual(self.sheet(OCT4).iloc[0]["gemini_prob"], 0.55)  # original LLMS value
+
 
 class CostExportIntegrationTests(DailyLogTestCase):
     def test_cost_spreadsheet_is_refreshed_after_every_run(self):

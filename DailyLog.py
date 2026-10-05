@@ -18,13 +18,18 @@ Each sheet groups its columns by source (Game, Kalshi odds, each AI, Result)
 under a colored header row, and a 'Column guide' sheet explains every column.
 
     py DailyLog.py [folder]
-    py DailyLog.py backfill [YYYY-MM-DD] [folder]
+    py DailyLog.py backfill [YYYY-MM-DD] [folder] [--force] [--only=OpenAI,Gemini]
 
 A game is only retried automatically if *every* AI failed for it; if one AI
 fails while the others succeed, the game is still logged, with that AI's
 cells left permanently blank. `backfill` fixes an already-logged day: for
 each AI with a blank cell, it re-fetches that market and re-queries just
 that AI, leaving everything else untouched.
+
+Add `--force` to re-query every row instead of just the blank cells -- for
+replacing predictions logged under an AI's old model with fresh ones after
+upgrading it in ai_settings.json. Combine with `--only=` to limit that to
+specific AIs, since --force re-spends on every row for the ones it covers.
 """
 
 import datetime
@@ -311,15 +316,25 @@ def backfill_missing_predictions(
     folder: str = DEFAULT_DIR,
     llms: Optional[list[tuple[str, Callable[[str], str]]]] = None,
     fetch_market=get_market,
+    force: bool = False,
 ) -> int:
     """
-    Fill in still-blank AI prediction cells for an already-logged day.
+    Fill in AI prediction cells for an already-logged day.
 
-    todays_rows() only retries a game if *every* AI failed for it, so a game
-    where one AI failed and the others succeeded gets logged anyway, leaving
-    that AI's cells permanently blank. This re-fetches the market for each
-    blank cell and re-queries just that AI, leaving every other cell (and
-    every other AI) untouched.
+    By default only fills still-blank cells: todays_rows() only retries a
+    game if *every* AI failed for it, so a game where one AI failed and the
+    others succeeded gets logged anyway, leaving that AI's cells permanently
+    blank.
+
+    With force=True, every row is re-queried for the given `llms` regardless
+    of whether a cell is already filled -- for re-running a day's games
+    through a newly-upgraded model to replace predictions logged under the
+    old one. Pass a specific `llms` list to limit this to just the AI(s) you
+    changed; it's deliberately not the default, since it re-spends on every
+    row instead of only the ones that actually failed.
+
+    Either way, this re-fetches the market for each cell touched and
+    re-queries just that AI, leaving every other cell untouched.
 
     Returns the number of cells filled in.
     """
@@ -336,7 +351,8 @@ def backfill_missing_predictions(
         if prob_col not in df.columns:
             continue
 
-        for idx in df.index[df[prob_col].isna()]:
+        targets = df.index if force else df.index[df[prob_col].isna()]
+        for idx in targets:
             ticker = df.at[idx, "ticker"]
             try:
                 prompt = build_prompt(fetch_market(ticker))
@@ -422,9 +438,20 @@ def run(
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "backfill":
-        day = datetime.date.fromisoformat(sys.argv[2]) if len(sys.argv) > 2 else datetime.date.today()
-        folder = sys.argv[3] if len(sys.argv) > 3 else DEFAULT_DIR
-        n = backfill_missing_predictions(day, folder)
+        args = sys.argv[2:]
+        force = "--force" in args
+        only = next((a.split("=", 1)[1] for a in args if a.startswith("--only=")), None)
+        positional = [a for a in args if not a.startswith("--")]
+
+        day = datetime.date.fromisoformat(positional[0]) if positional else datetime.date.today()
+        folder = positional[1] if len(positional) > 1 else DEFAULT_DIR
+
+        llms = default_llms()
+        if only:
+            names = {n.strip().lower() for n in only.split(",")}
+            llms = [(name, fn) for name, fn in llms if name.lower() in names]
+
+        n = backfill_missing_predictions(day, folder, llms=llms, force=force)
         print(f"backfilled {n} cell(s)" if n else "nothing to backfill")
     else:
         run(sys.argv[1] if len(sys.argv) > 1 else DEFAULT_DIR)

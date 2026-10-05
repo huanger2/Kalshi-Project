@@ -13,7 +13,7 @@ SETTINGS_PATH = Path(__file__).with_name("ai_settings.json")
 
 DEFAULT_MODELS = {
     "claude": "claude-sonnet-5-5",
-    "openai": "gpt-4.1-mini",
+    "openai": "gpt-5.1",
     "gemini": "gemini-3.8-flash",
 }
 

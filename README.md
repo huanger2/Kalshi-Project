@@ -34,7 +34,7 @@ Each AI's model is set in [`ai_settings.json`](ai_settings.json):
 {
     "models": {
         "claude": "claude-sonnet-5-5",
-        "openai": "gpt-4.1-mini",
+        "openai": "gpt-5.1",
         "gemini": "gemini-3.8-flash"
     }
 }
@@ -148,7 +148,7 @@ real quotes:
 {
     "models": {
         "claude-sonnet-5-5": {"input_per_million": null, "output_per_million": null},
-        "gpt-4.1-mini": {"input_per_million": null, "output_per_million": null},
+        "gpt-5.1": {"input_per_million": null, "output_per_million": null},
         "gemini-3.8-flash": {"input_per_million": null, "output_per_million": null}
     }
 }
