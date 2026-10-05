@@ -32,6 +32,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
+import CostExport
 from Kalshi import get_nba_results, get_prices, get_todays_nba_games, implied_yes_prob
 from Probability import default_llms, query_llms
 
@@ -349,6 +350,17 @@ def run(
         save(df, path, llm_names)
 
     print(f"settled {settled} earlier game(s); logged {len(new_rows)} game(s) to {path}")
+
+    # Every AI call today was already logged to predictions.db as it happened
+    # (see CostTracker.py); refresh the running api_costs.xlsx from it so the
+    # spreadsheet never falls behind without needing a separate manual step.
+    # Best-effort: a locked/open spreadsheet shouldn't fail the whole daily run.
+    try:
+        cost_path = CostExport.export_to_excel()
+        print(f"updated {cost_path}")
+    except Exception as e:
+        print(f"could not update cost spreadsheet: {e}")
+
     return settled, len(new_rows)
 
 

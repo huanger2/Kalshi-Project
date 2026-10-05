@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import CostTracker
@@ -105,6 +106,50 @@ class RecordAndSummarizeTests(unittest.TestCase):
             CostTracker.record_usage("OpenAI", "m", 100, 100, db_path=bad_path)
         except Exception as e:  # pragma: no cover - this is exactly what must not happen
             self.fail(f"record_usage raised: {e}")
+
+
+class RecordFromResponseTests(unittest.TestCase):
+    """
+    Shared by OpenAi.py/ClaudeAi.py (default field names) and Gemini.py
+    (its own field names), so it's covered once here instead of being
+    re-tested identically in each provider's own test file.
+    """
+
+    def test_default_fields_match_the_openai_compatible_shape(self):
+        response = SimpleNamespace(usage=SimpleNamespace(prompt_tokens=11, completion_tokens=22))
+        with mock.patch.object(CostTracker, "record_usage") as record:
+            CostTracker.record_from_response("OpenAI", "m", response, "a question")
+        record.assert_called_once_with(
+            provider="OpenAI", model="m", input_tokens=11, output_tokens=22, context="a question",
+        )
+
+    def test_custom_fields_match_geminis_shape(self):
+        response = SimpleNamespace(usage_metadata=SimpleNamespace(prompt_token_count=5, candidates_token_count=7))
+        with mock.patch.object(CostTracker, "record_usage") as record:
+            CostTracker.record_from_response(
+                "Gemini", "m", response, "q",
+                usage_attr="usage_metadata", input_field="prompt_token_count", output_field="candidates_token_count",
+            )
+        record.assert_called_once_with(
+            provider="Gemini", model="m", input_tokens=5, output_tokens=7, context="q",
+        )
+
+    def test_missing_usage_attribute_records_nothing(self):
+        response = SimpleNamespace()  # no .usage at all
+        with mock.patch.object(CostTracker, "record_usage") as record:
+            CostTracker.record_from_response("OpenAI", "m", response, "q")
+        record.assert_not_called()
+
+    def test_context_is_truncated_to_200_chars(self):
+        response = SimpleNamespace(usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1))
+        with mock.patch.object(CostTracker, "record_usage") as record:
+            CostTracker.record_from_response("OpenAI", "m", response, "x" * 500)
+        self.assertEqual(len(record.call_args.kwargs["context"]), 200)
+
+    def test_record_usage_failure_is_swallowed_not_raised(self):
+        response = SimpleNamespace(usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1))
+        with mock.patch.object(CostTracker, "record_usage", side_effect=RuntimeError("db locked")):
+            CostTracker.record_from_response("OpenAI", "m", response, "q")  # must not raise
 
 
 if __name__ == "__main__":

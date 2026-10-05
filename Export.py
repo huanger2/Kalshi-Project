@@ -15,6 +15,7 @@ import sys
 import pandas as pd
 
 import Tracker
+from ExcelUtil import write_workbook
 
 DEFAULT_OUT = "predictions.xlsx"
 
@@ -77,11 +78,7 @@ def export_to_excel(db_path: str = Tracker.DEFAULT_DB, out_path: str = DEFAULT_O
         # still open, so this must be closed before returning.
         conn.close()
 
-    with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
-        predictions.to_excel(writer, sheet_name="predictions", index=False)
-        summary.to_excel(writer, sheet_name="llm_summary", index=False)
-
-    return out_path
+    return write_workbook({"predictions": predictions, "llm_summary": summary}, out_path)
 
 
 if __name__ == "__main__":

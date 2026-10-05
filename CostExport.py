@@ -8,12 +8,14 @@ spend summary.
     py CostExport.py [db_path] [out_path]
 """
 
+import sqlite3
 import sys
 
 import pandas as pd
 
 import CostTracker
 import Tracker
+from ExcelUtil import write_workbook
 
 DEFAULT_OUT = "api_costs.xlsx"
 
@@ -45,8 +47,6 @@ def export_to_excel(db_path: str = Tracker.DEFAULT_DB, out_path: str = DEFAULT_O
 
     Returns the output path.
     """
-    import sqlite3
-
     conn = sqlite3.connect(db_path)
     try:
         conn.executescript(CostTracker.SCHEMA)
@@ -58,11 +58,7 @@ def export_to_excel(db_path: str = Tracker.DEFAULT_DB, out_path: str = DEFAULT_O
 
     summary = _summary_frame(db_path)
 
-    with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
-        usage.to_excel(writer, sheet_name="usage_log", index=False)
-        summary.to_excel(writer, sheet_name="provider_summary", index=False)
-
-    return out_path
+    return write_workbook({"usage_log": usage, "provider_summary": summary}, out_path)
 
 
 if __name__ == "__main__":

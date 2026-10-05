@@ -13,8 +13,7 @@ Requires Python 3.10+.
 pip install requests python-dotenv pandas openpyxl openai google-genai
 ```
 
-Optional: `cryptography` (only for Kalshi's authenticated endpoints) and
-`nba_api` (only for `Schedule.py`).
+Optional: `cryptography` (only for Kalshi's authenticated endpoints).
 
 Put your API keys in `AIAPIKEYS.env` in the project folder. It is gitignored,
 so it is never committed.
@@ -160,10 +159,17 @@ with an **unknown** cost rather than silently assuming $0. Every call to
 `ask_openai` / `ask_claude` / `ask_gemini` logs its usage automatically; a
 logging failure prints a warning instead of breaking the AI call.
 
+**`api_costs.xlsx` stays current on its own.** Every `DailyLog.py` run
+refreshes it from `predictions.db` after logging today's games, the same way
+it already updates `daily_logs/` -- so the running total is always up to
+date without a separate manual step. A locked/open spreadsheet just skips
+that refresh with a message instead of failing the whole run; the next
+day's run catches it up.
+
 | Command | What it does |
 |---|---|
 | `python Collect.py usage` | Print each AI's logged token usage and estimated spend |
-| `python Collect.py costs [file.xlsx]` | Export logged API usage/spend to its own Excel file (`api_costs.xlsx` by default) |
+| `python Collect.py costs [file.xlsx]` | Refresh the Excel export by hand (`api_costs.xlsx` by default) |
 
 ## Other tools
 
@@ -173,14 +179,17 @@ logging failure prints a warning instead of breaking the AI call.
 | `python Collect.py settle` | Record results for finished games in `predictions.db` |
 | `python Collect.py weights` | Show each AI's accuracy (Brier score) and resulting weight |
 | `python Collect.py export [file.xlsx]` | Export `predictions.db` to Excel |
-| `python Probability.py` | Run the full expected-value analysis on one open game |
-| `python Kalshi.py` | List open NBA game markets with implied probabilities |
+| `python scripts.py probability` | Run the full expected-value analysis on one open game |
+| `python scripts.py kalshi` | List open NBA game markets with implied probabilities |
+| `python scripts.py ev` | EVCalculator worked example with made-up numbers |
+| `python scripts.py gemini` | Ask Gemini one sample prediction question |
 
 ## Project layout
 
 | File | Purpose |
 |---|---|
 | `DailyLog.py` | The daily data-collection run described above |
+| `scripts.py` | Ad-hoc demos for poking at one piece of the pipeline by hand |
 | `Kalshi.py` | Kalshi API: markets, prices, today's games, current odds, results |
 | `ClaudeAi.py`, `OpenAi.py`, `Gemini.py` | One wrapper per AI API |
 | `AISettings.py`, `ai_settings.json` | Which model each AI uses |
@@ -189,6 +198,7 @@ logging failure prints a warning instead of breaking the AI call.
 | `Tracker.py`, `Export.py`, `Collect.py` | SQLite prediction tracking, accuracy weights, Excel export |
 | `Notifier.py` | Emails an alert when an AI API call looks like a billing/quota failure |
 | `CostTracker.py`, `CostExport.py`, `model_pricing.json` | Token-based API spend estimate and Excel export |
+| `ExcelUtil.py` | Shared workbook-writing helper used by `Export.py` and `CostExport.py` |
 | `schedule_task.ps1` | Registers the Windows Task Scheduler task that runs `DailyLog.py` daily |
 
 ## Tests

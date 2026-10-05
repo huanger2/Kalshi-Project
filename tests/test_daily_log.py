@@ -53,12 +53,14 @@ class DailyLogTestCase(unittest.TestCase):
         return DailyLog.load(DailyLog.path_for(day, self.folder))
 
     def run_day(self, today, markets=(), results=(), llms=LLMS):
-        """Run DailyLog for `today` with Kalshi mocked out; returns today's sheet."""
+        """Run DailyLog for `today` with Kalshi and CostExport mocked out; returns today's sheet."""
         with mock.patch.object(DailyLog, "get_todays_nba_games", return_value=list(markets)), \
              mock.patch.object(DailyLog, "get_nba_results", return_value=list(results)) as get_results, \
+             mock.patch.object(DailyLog, "CostExport") as cost_export, \
              contextlib.redirect_stdout(io.StringIO()):
             self.counts = DailyLog.run(self.folder, today=today, llms=llms)
         self.get_results = get_results
+        self.cost_export = cost_export
         return self.sheet(today)
 
 
@@ -277,6 +279,26 @@ class OldLayoutTests(DailyLogTestCase):
         self.assertEqual(df.iloc[0]["team_won"], 1)
         self.assertAlmostEqual(df.iloc[0]["openai_prob"], 0.7)
         self.assertEqual(openpyxl.load_workbook(self.path)["Daily log"]["A2"].value, "Game date")
+
+
+class CostExportIntegrationTests(DailyLogTestCase):
+    def test_cost_spreadsheet_is_refreshed_after_every_run(self):
+        self.run_day(OCT4, TODAY_MARKETS)
+        self.cost_export.export_to_excel.assert_called_once()
+
+    def test_cost_spreadsheet_is_refreshed_even_with_no_new_games(self):
+        self.run_day(OCT4, [])
+        self.cost_export.export_to_excel.assert_called_once()
+
+    def test_a_locked_cost_spreadsheet_does_not_fail_the_whole_run(self):
+        with mock.patch.object(DailyLog, "get_todays_nba_games", return_value=list(TODAY_MARKETS)), \
+             mock.patch.object(DailyLog, "get_nba_results", return_value=[]), \
+             mock.patch.object(DailyLog, "CostExport") as cost_export, \
+             contextlib.redirect_stdout(io.StringIO()):
+            cost_export.export_to_excel.side_effect = PermissionError("locked")
+            counts = DailyLog.run(self.folder, today=OCT4, llms=LLMS)
+        # Games were still logged despite the cost-export step failing.
+        self.assertEqual(counts, (0, 2))
 
 
 if __name__ == "__main__":

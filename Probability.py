@@ -241,29 +241,3 @@ def list_markets(series: str = NBA_GAME_SERIES, limit: int = 20) -> None:
         except ValueError:
             last = "??"
         print(f"  {m['ticker']:<40} {last:>4}¢  |  {m['title']}")
-
-
-# ---------------------------------------------------------------------------
-# Example usage
-# ---------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    import Tracker
-
-    list_markets(series=NBA_GAME_SERIES, limit=10)
-
-    markets = one_market_per_event(get_all_markets(market=NBA_GAME_SERIES))
-    if not markets:
-        raise RuntimeError(f"No open {NBA_GAME_SERIES} markets found.")
-    market = markets[0]
-
-    conn = Tracker.connect()
-    weights = Tracker.compute_weights(conn)
-
-    bet, result = analyze_market(
-        market=market,
-        threshold=0.05,
-        historical_weights=weights or None,
-        verbose=True,
-        db_conn=conn,
-    )

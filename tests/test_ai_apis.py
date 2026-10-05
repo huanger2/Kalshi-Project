@@ -1,5 +1,5 @@
 """
-Tests for the AI API wrappers (ClaudeAi, OpenAi, Gemini, AICentral).
+Tests for the AI API wrappers (ClaudeAi, OpenAi, Gemini).
 
 The unit tests mock every client, so they need no keys and cost nothing.
 
@@ -15,7 +15,6 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-import AICentral
 import ClaudeAi
 import Gemini
 import OpenAi
@@ -276,26 +275,6 @@ class GeminiTests(ResetClientMixin, unittest.TestCase):
              mock.patch("CostTracker.record_usage", side_effect=RuntimeError("db locked")):
             result = Gemini.ask_gemini("q")
         self.assertEqual(result, "ok")
-
-
-class AICentralTests(unittest.TestCase):
-    def test_asks_both_ais_the_same_question(self):
-        with mock.patch.object(AICentral, "ask_claude", return_value="c") as claude, \
-             mock.patch.object(AICentral, "ask_openai", return_value="o") as openai:
-            AICentral.get_ai_responses("Who wins?")
-        claude.assert_called_once_with("Who wins?")
-        openai.assert_called_once_with("Who wins?")
-
-    def test_returns_one_row_per_ai(self):
-        with mock.patch.object(AICentral, "ask_claude", return_value="claude says"), \
-             mock.patch.object(AICentral, "ask_openai", return_value="openai says"):
-            df = AICentral.get_ai_responses("q")
-
-        self.assertEqual(list(df.columns), ["AI", "RESPONSE"])
-        self.assertEqual(df.to_dict("records"), [
-            {"AI": "Claude", "RESPONSE": "claude says"},
-            {"AI": "OpenAI", "RESPONSE": "openai says"},
-        ])
 
 
 # ---------------------------------------------------------------------------

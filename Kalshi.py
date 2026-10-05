@@ -279,8 +279,3 @@ def get_nba_results(day: datetime.date) -> list[dict]:
 def get_yesterdays_nba_results(today: Optional[datetime.date] = None) -> list[dict]:
     """Final results for yesterday's NBA games."""
     return get_nba_results((today or datetime.date.today()) - datetime.timedelta(days=1))
-
-
-if __name__ == "__main__":
-    for m in get_all_markets(market=NBA_GAME_SERIES):
-        print(m["ticker"], "|", m["title"], "|", f"{implied_yes_prob(m):.0%}")

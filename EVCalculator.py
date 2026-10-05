@@ -1,6 +1,5 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
-import json
 
 
 @dataclass
@@ -143,33 +142,3 @@ class EVCalculator:
         """
         result = self.calculate(kalshi_price, predictions)
         return result.ev >= threshold, result
-
-
-# --- Example usage ---
-if __name__ == "__main__":
-    # Finetuned historical weights per LLM (learned offline from past accuracy)
-    historical_weights = {
-        "gpt-4o":        1.0,
-        "claude-sonnet": 1.0,
-        "gemini-pro":    1.0,
-    }
-
-    calculator = EVCalculator(weights=historical_weights)
-
-    # Cavaliers vs Pistons — Kalshi has Cavs winning at 55 cents
-    kalshi_price = 55  # cents
-
-    predictions = [
-        LLMPrediction(llm_name="gpt-4o",        predicted_prob=0.72, confidence=0.80),
-        LLMPrediction(llm_name="claude-sonnet",  predicted_prob=0.68, confidence=0.75),
-        LLMPrediction(llm_name="gemini-pro",     predicted_prob=0.61, confidence=0.60),
-    ]
-
-    threshold = 0.05
-
-    bet, result = calculator.should_bet(kalshi_price, predictions, threshold)
-
-    print(result)
-    print()
-    print(f"Threshold:        {threshold}")
-    print(f"Bet recommended:  {'YES' if bet else 'NO'}")

@@ -111,6 +111,44 @@ def record_usage(
         print(f"[CostTracker] failed to record usage for {provider}: {e}")
 
 
+def record_from_response(
+    provider: str,
+    model: str,
+    response,
+    context: str = "",
+    usage_attr: str = "usage",
+    input_field: str = "prompt_tokens",
+    output_field: str = "completion_tokens",
+) -> None:
+    """
+    Extract token usage from an API response object and log it via
+    record_usage(). Shared by OpenAi.py, ClaudeAi.py and Gemini.py so the
+    extraction logic lives in one place instead of three near-identical
+    copies.
+
+    The defaults match the OpenAI-compatible shape OpenAi.py and ClaudeAi.py
+    get back (`response.usage.prompt_tokens` / `.completion_tokens`); pass
+    Gemini's own field names (`usage_metadata`, `prompt_token_count`,
+    `candidates_token_count`) for that provider.
+
+    Swallows every error -- a logging failure must never break the AI call
+    it is trying to measure.
+    """
+    try:
+        usage = getattr(response, usage_attr, None)
+        if usage is None:
+            return
+        record_usage(
+            provider=provider,
+            model=model,
+            input_tokens=getattr(usage, input_field, None),
+            output_tokens=getattr(usage, output_field, None),
+            context=context[:200],
+        )
+    except Exception as e:
+        print(f"[CostTracker] failed to record usage for {provider}: {e}")
+
+
 def usage_summary(db_path: str = Tracker.DEFAULT_DB) -> list[dict]:
     """
     Per-provider totals since tracking started: call count, token totals, known
