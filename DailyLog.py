@@ -45,6 +45,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 import CostExport
+from AISettings import get_model
 from Kalshi import get_market, get_nba_results, get_prices, get_todays_nba_games, implied_yes_prob
 from Probability import build_prompt, default_llms, parse_response, query_llms
 
@@ -96,6 +97,9 @@ def column_spec(llm_names: list[str]) -> list[Column]:
                    f"{name}'s estimate of the chance Team wins (model set in ai_settings.json).", PERCENT),
             Column(f"{key}_confidence", f"{name} confidence", name, name,
                    f"How sure {name} says it is of its estimate: 0% = pure guess, 100% = certain.", PERCENT),
+            Column(f"{key}_model", f"{name} model", name, name,
+                   f"Which {name} model produced this row's prediction. Lets you tell an old "
+                   f"model's predictions apart from a newer one's after an ai_settings.json upgrade."),
         ]
     spec += [
         Column("winner", "Winner", "Result", "Kalshi",
@@ -135,6 +139,8 @@ def _header_to_key(header: str) -> str:
         return header[: -len(" win %")].lower() + "_prob"
     if header.endswith(" confidence"):
         return header[: -len(" confidence")].lower() + "_confidence"
+    if header.endswith(" model"):
+        return header[: -len(" model")].lower() + "_model"
     return header
 
 
@@ -304,8 +310,10 @@ def todays_rows(
             "market_prob": implied_yes_prob(market),
         }
         for p in predictions:
-            row[f"{p.llm_name.lower()}_prob"] = p.predicted_prob
-            row[f"{p.llm_name.lower()}_confidence"] = p.confidence
+            key = p.llm_name.lower()
+            row[f"{key}_prob"] = p.predicted_prob
+            row[f"{key}_confidence"] = p.confidence
+            row[f"{key}_model"] = get_model(key)
         rows.append(row)
         print(f"logged {event}: {row['team']} vs {row['opponent']}")
     return rows
@@ -347,7 +355,7 @@ def backfill_missing_predictions(
     filled = 0
     for llm_name, ask_fn in llms:
         key = llm_name.lower()
-        prob_col, conf_col = f"{key}_prob", f"{key}_confidence"
+        prob_col, conf_col, model_col = f"{key}_prob", f"{key}_confidence", f"{key}_model"
         if prob_col not in df.columns:
             continue
 
@@ -362,12 +370,17 @@ def backfill_missing_predictions(
                 continue
             df.at[idx, prob_col] = prob
             df.at[idx, conf_col] = conf
+            df.at[idx, model_col] = get_model(key)
             filled += 1
             print(f"backfilled {llm_name} for {df.at[idx, 'team']} ({ticker}): "
                   f"{prob:.0%} probability, {conf:.0%} confidence")
 
     if filled:
-        save(df, path, [name for name, _ in llms])
+        # Always the full canonical layout, not just the (possibly
+        # --only=-restricted) subset of AIs that were re-queried this call --
+        # otherwise an untouched AI's columns get shunted into a generic
+        # "Other" group at the end of the sheet instead of staying in place.
+        save(df, path, DEFAULT_LLM_NAMES)
     return filled
 
 

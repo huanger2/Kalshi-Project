@@ -68,7 +68,11 @@ Columns are grouped by source under a colored header row:
 
 | Game | Kalshi odds | OpenAI / Claude / Gemini | Result | Details |
 |---|---|---|---|---|
-| date, team, opponent | bid, ask, implied win % | win %, confidence | winner, team won?, when recorded | when logged, Kalshi IDs |
+| date, team, opponent | bid, ask, implied win % | win %, confidence, model | winner, team won?, when recorded | when logged, Kalshi IDs |
+
+Each AI's `model` column records which model (from `ai_settings.json`)
+actually produced that row's prediction, so a model upgrade doesn't leave
+old and new predictions indistinguishable in the data.
 
 Each file also has a **Column guide** sheet explaining every column and its source.
 

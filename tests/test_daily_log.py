@@ -218,7 +218,7 @@ class LayoutTests(DailyLogTestCase):
         groups = [v for v in self.row_values(1) if v]
         self.assertEqual(groups, ["Game", "Kalshi odds", "OpenAI", "Claude", "Gemini", "Result", "Details"])
         merged = {str(r) for r in self.ws.merged_cells.ranges}
-        self.assertIn("G1:H1", merged)  # OpenAI spans its two columns
+        self.assertIn("G1:I1", merged)  # OpenAI spans its three columns (win %, confidence, model)
 
     def test_row_2_has_readable_headers(self):
         headers = self.row_values(2)
@@ -279,6 +279,62 @@ class OldLayoutTests(DailyLogTestCase):
         self.assertEqual(df.iloc[0]["team_won"], 1)
         self.assertAlmostEqual(df.iloc[0]["openai_prob"], 0.7)
         self.assertEqual(openpyxl.load_workbook(self.path)["Daily log"]["A2"].value, "Game date")
+
+
+class ModelColumnTests(DailyLogTestCase):
+    def test_todays_rows_records_the_configured_model_for_each_successful_ai(self):
+        with mock.patch.object(DailyLog, "get_model", side_effect=lambda p: f"{p}-test-model"):
+            df = self.run_day(OCT4, TODAY_MARKETS[:2])
+        row = df.iloc[0]
+        self.assertEqual(row["openai_model"], "openai-test-model")
+        self.assertEqual(row["claude_model"], "claude-test-model")
+        self.assertEqual(row["gemini_model"], "gemini-test-model")
+
+    def test_a_failing_ai_has_no_model_recorded(self):
+        def broken(prompt):
+            raise RuntimeError("API down")
+
+        llms = [("OpenAI", broken), ("Claude", fake_llm(65, 60)), ("Gemini", fake_llm(55, 50))]
+        with mock.patch.object(DailyLog, "get_model", side_effect=lambda p: f"{p}-test-model"):
+            df = self.run_day(OCT4, TODAY_MARKETS[:2], llms=llms)
+        self.assertTrue(pd.isna(df.iloc[0]["openai_model"]))
+        self.assertEqual(df.iloc[0]["claude_model"], "claude-test-model")
+
+    def test_backfill_records_the_model_too(self):
+        def broken(prompt):
+            raise RuntimeError("API down")
+
+        llms = [("OpenAI", broken), ("Claude", fake_llm(65, 60)), ("Gemini", fake_llm(55, 50))]
+        self.run_day(OCT4, TODAY_MARKETS[:1], llms=llms)
+
+        with mock.patch.object(DailyLog, "get_model", return_value="new-openai-model"):
+            DailyLog.backfill_missing_predictions(
+                OCT4, self.folder, llms=[("OpenAI", fake_llm(80, 90))],
+                fetch_market=lambda t: next(m for m in TODAY_MARKETS if m["ticker"] == t),
+            )
+        self.assertEqual(self.sheet(OCT4).iloc[0]["openai_model"], "new-openai-model")
+
+
+class BackfillLayoutRegressionTests(DailyLogTestCase):
+    """
+    Regression guard: an earlier version passed the (possibly --only=
+    restricted) queried-AI list straight to save() for column *layout* too,
+    which shunted an untouched AI's columns into a generic "Other" group at
+    the end of the sheet instead of leaving them in place.
+    """
+
+    def test_backfilling_just_one_ai_does_not_misplace_the_others_columns(self):
+        self.run_day(OCT4, TODAY_MARKETS[:1])  # all 3 AIs log normally
+
+        DailyLog.backfill_missing_predictions(
+            OCT4, self.folder, llms=[("Gemini", fake_llm(99, 1))],
+            fetch_market=lambda t: next(m for m in TODAY_MARKETS if m["ticker"] == t), force=True,
+        )
+
+        wb = openpyxl.load_workbook(self.path)
+        groups = [v for v in [c.value for c in wb["Daily log"][1]] if v]
+        self.assertEqual(groups, ["Game", "Kalshi odds", "OpenAI", "Claude", "Gemini", "Result", "Details"])
+        self.assertNotIn("Other", groups)
 
 
 class BackfillTests(DailyLogTestCase):
