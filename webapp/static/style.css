@@ -122,9 +122,9 @@ table a:hover { text-decoration: underline; }
 .pill.pending { background: var(--pending-bg); color: var(--muted); }
 .pill.won { background: var(--won-bg); color: var(--won); }
 .pill.lost { background: var(--lost-bg); color: var(--lost); }
-.pill.season-preseason { background: var(--pending-bg); color: var(--muted); }
-.pill.season-regular { background: #e8f0fe; color: var(--accent); }
-.pill.season-postseason { background: var(--postseason-bg); color: var(--postseason); }
+.pill.segment-preseason { background: var(--pending-bg); color: var(--muted); }
+.pill.segment-regular { background: #e8f0fe; color: var(--accent); }
+.pill.segment-postseason { background: var(--postseason-bg); color: var(--postseason); }
 
 .facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.3rem 1rem; margin: 0; }
 .facts dt { color: var(--muted); font-size: 0.85rem; }

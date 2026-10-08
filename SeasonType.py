@@ -1,18 +1,23 @@
 """
 SeasonType.py
 
-Classifies an NBA game date as "preseason", "regular", or "postseason".
+Two independent things you can know about an NBA game date, neither of
+which Kalshi's market data labels itself (checked directly against the
+live API: a KXNBAGAME market has no category/game_type/season field, just
+the two teams, a date, and generic "Pro Basketball game" rules text):
 
-Kalshi's market data doesn't label this itself -- a KXNBAGAME market has no
-category/game_type field, just the two teams, a date, and generic "Pro
-Basketball game" rules text (checked directly against the live API). So
-this is date-based instead.
+    season_year(day)  -- which year-spanning season, e.g. "2026-27"
+    segment(day)      -- "preseason", "regular", or "postseason"
 
-Defaults to a generic calendar heuristic (regular season starts ~Oct 21,
-postseason ~Apr 14) that holds approximately for most seasons but can be
-off by a few days. Fill in nba_season.json with a season's actual
-published start dates for exact boundaries; read fresh on every call, like
-ai_settings.json, so an edit takes effect without restarting anything.
+Both are pure functions of the date, so neither is stored anywhere -- a
+query always reflects the current nba_season.json, never a stale snapshot
+from whenever a row was inserted.
+
+segment() defaults to a generic calendar heuristic (regular season starts
+~Oct 21, postseason ~Apr 14) that holds approximately for most seasons.
+Fill in nba_season.json with a season's actual published start dates for
+exact boundaries; read fresh on every call, like ai_settings.json, so an
+edit takes effect without restarting anything.
 """
 
 import datetime
@@ -27,10 +32,17 @@ DEFAULT_REGULAR_SEASON_START = (10, 21)
 DEFAULT_POSTSEASON_START = (4, 14)
 
 
-def season_key(day: datetime.date) -> str:
-    """The season a date belongs to, e.g. "2026-27" for Oct 2026 - Jun 2027."""
+def season_year(day: datetime.date) -> str:
+    """Which year-spanning season a date belongs to, e.g. "2026-27" for Oct 2026 - Jun 2027."""
     start_year = day.year if day.month >= 7 else day.year - 1
     return f"{start_year}-{str(start_year + 1)[-2:]}"
+
+
+def season_year_iso(game_date: Optional[str]) -> Optional[str]:
+    """Same as season_year(), but takes (and tolerates a missing/blank) ISO date string."""
+    if not game_date:
+        return None
+    return season_year(datetime.date.fromisoformat(game_date))
 
 
 def _load_config() -> dict:
@@ -60,9 +72,9 @@ def _boundary(day: datetime.date, overrides: dict, key: str, default_month_day: 
     return _date_in_same_season(day, *default_month_day)
 
 
-def classify(day: datetime.date) -> str:
-    """"preseason", "regular", or "postseason" for the NBA season `day` falls in."""
-    overrides = _load_config().get(season_key(day))
+def segment(day: datetime.date) -> str:
+    """"preseason", "regular", or "postseason" -- which part of its season `day` falls in."""
+    overrides = _load_config().get(season_year(day))
     regular_start = _boundary(day, overrides, "regular_season_start", DEFAULT_REGULAR_SEASON_START)
     postseason_start = _boundary(day, overrides, "postseason_start", DEFAULT_POSTSEASON_START)
 
@@ -73,8 +85,8 @@ def classify(day: datetime.date) -> str:
     return "postseason"
 
 
-def classify_iso(game_date: Optional[str]) -> Optional[str]:
-    """Same as classify(), but takes (and tolerates a missing/blank) ISO date string."""
+def segment_iso(game_date: Optional[str]) -> Optional[str]:
+    """Same as segment(), but takes (and tolerates a missing/blank) ISO date string."""
     if not game_date:
         return None
-    return classify(datetime.date.fromisoformat(game_date))
+    return segment(datetime.date.fromisoformat(game_date))

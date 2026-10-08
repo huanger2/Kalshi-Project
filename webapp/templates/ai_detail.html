@@ -7,14 +7,22 @@
     <p class="subtitle">
         {{ stats.settled_n }} settled game{{ "" if stats.settled_n == 1 else "s" }},
         {{ stats.pending_n }} pending
-        {% if selected_season %} &middot; {{ selected_season }} only{% endif %}
+        {% if selected_season %} &middot; {{ selected_season }}{% endif %}
+        {% if selected_segment %} &middot; {{ selected_segment }} only{% endif %}
     </p>
     <form class="filters" method="get" action="/ai/{{ stats.llm }}">
         <label for="season">Season</label>
         <select name="season" id="season" onchange="this.form.submit()">
-            <option value="" {% if not selected_season %}selected{% endif %}>All</option>
-            {% for s in season_types %}
-                <option value="{{ s }}" {% if s == selected_season %}selected{% endif %}>{{ s | capitalize }}</option>
+            <option value="" {% if not selected_season %}selected{% endif %}>All seasons</option>
+            {% for s in seasons %}
+                <option value="{{ s }}" {% if s == selected_season %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+        </select>
+        <label for="segment">Part of season</label>
+        <select name="segment" id="segment" onchange="this.form.submit()">
+            <option value="" {% if not selected_segment %}selected{% endif %}>All</option>
+            {% for s in segments %}
+                <option value="{{ s }}" {% if s == selected_segment %}selected{% endif %}>{{ s | capitalize }}</option>
             {% endfor %}
         </select>
     </form>
@@ -104,7 +112,7 @@
             <tr>
                 <td>{{ p.game_date or "?" }}</td>
                 <td><a href="/markets/{{ p.ticker }}">{{ p.team }} vs {{ p.opponent or "?" }}</a></td>
-                <td><span class="pill season-{{ p.season_type }}">{{ p.season_type or "?" }}</span></td>
+                <td>{{ p.season_year or "?" }} <span class="pill segment-{{ p.segment }}">{{ p.segment or "?" }}</span></td>
                 <td class="model">{{ p.model or "?" }}</td>
                 <td>{{ (p.predicted_prob * 100) | round | int }}%</td>
                 <td>{{ (p.confidence * 100) | round | int }}%</td>

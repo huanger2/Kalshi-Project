@@ -66,21 +66,38 @@ class ListGamesTests(QueriesTestCase):
     def test_no_games_is_an_empty_list(self):
         self.assertEqual(queries.list_games(self.conn), [])
 
-    def test_includes_the_derived_season_type(self):
+    def test_includes_the_derived_segment(self):
         self.record("G1", "Denver", 0.5, [pred("OpenAI", 0.7)], game_date="2026-10-05")
-        self.assertEqual(queries.list_games(self.conn)[0]["season_type"], "preseason")
+        self.assertEqual(queries.list_games(self.conn)[0]["segment"], "preseason")
 
-    def test_filters_by_season_type(self):
+    def test_filters_by_segment(self):
         self.record("G1", "Denver", 0.5, [pred("OpenAI", 0.7)], game_date="2026-10-05")  # preseason
         self.record("G2", "Utah", 0.5, [pred("OpenAI", 0.5)], game_date="2026-12-25")    # regular
-        games = queries.list_games(self.conn, season_type="regular")
+        games = queries.list_games(self.conn, segment="regular")
         self.assertEqual([g["ticker"] for g in games], ["G2"])
 
-    def test_date_and_season_type_filters_combine(self):
+    def test_date_and_segment_filters_combine(self):
         self.record("G1", "Denver", 0.5, [pred("OpenAI", 0.7)], game_date="2026-10-05")
         self.record("G2", "Utah", 0.5, [pred("OpenAI", 0.5)], game_date="2026-10-05")
-        games = queries.list_games(self.conn, game_date="2026-10-05", season_type="postseason")
+        games = queries.list_games(self.conn, game_date="2026-10-05", segment="postseason")
         self.assertEqual(games, [])
+
+    def test_includes_the_derived_season_year(self):
+        self.record("G1", "Denver", 0.5, [pred("OpenAI", 0.7)], game_date="2026-10-05")
+        self.assertEqual(queries.list_games(self.conn)[0]["season_year"], "2026-27")
+
+    def test_filters_by_season_year_independently_of_segment(self):
+        self.record("G1", "Denver", 0.5, [pred("OpenAI", 0.7)], game_date="2026-10-05")  # 2026-27, preseason
+        self.record("G2", "Utah", 0.5, [pred("OpenAI", 0.5)], game_date="2027-10-05")    # 2027-28, preseason
+        games = queries.list_games(self.conn, season_year="2027-28")
+        self.assertEqual([g["ticker"] for g in games], ["G2"])
+
+    def test_season_year_and_segment_combine(self):
+        self.record("G1", "Denver", 0.5, [pred("OpenAI", 0.7)], game_date="2026-10-05")  # 2026-27, preseason
+        self.record("G2", "Utah", 0.5, [pred("OpenAI", 0.5)], game_date="2026-12-25")    # 2026-27, regular
+        self.record("G3", "Golden State", 0.5, [pred("OpenAI", 0.5)], game_date="2027-10-05")  # 2027-28, preseason
+        games = queries.list_games(self.conn, season_year="2026-27", segment="preseason")
+        self.assertEqual([g["ticker"] for g in games], ["G1"])
 
 
 class ListGameDatesTests(QueriesTestCase):
@@ -89,6 +106,17 @@ class ListGameDatesTests(QueriesTestCase):
         self.record("G2", "Utah", 0.5, [pred("OpenAI", 0.5)], game_date="2026-10-04")
         self.record("G3", "Golden State", 0.5, [pred("OpenAI", 0.5)], game_date="2026-10-06")
         self.assertEqual(queries.list_game_dates(self.conn), ["2026-10-06", "2026-10-04"])
+
+
+class ListSeasonYearsTests(QueriesTestCase):
+    def test_distinct_seasons_newest_first(self):
+        self.record("G1", "Denver", 0.6, [pred("OpenAI", 0.7)], game_date="2026-10-04")
+        self.record("G2", "Utah", 0.5, [pred("OpenAI", 0.5)], game_date="2027-04-20")  # still 2026-27
+        self.record("G3", "Golden State", 0.5, [pred("OpenAI", 0.5)], game_date="2027-10-04")  # 2027-28
+        self.assertEqual(queries.list_season_years(self.conn), ["2027-28", "2026-27"])
+
+    def test_no_games_is_an_empty_list(self):
+        self.assertEqual(queries.list_season_years(self.conn), [])
 
 
 class GetGameTests(QueriesTestCase):
@@ -120,9 +148,13 @@ class GetGameTests(QueriesTestCase):
         self.assertEqual(game["outcome"], 0)
         self.assertIsNotNone(game["settled_at"])
 
-    def test_includes_the_derived_season_type(self):
+    def test_includes_the_derived_segment(self):
         self.record("G1", "Denver", 0.5, [pred("OpenAI", 0.7)], game_date="2027-05-01")
-        self.assertEqual(queries.get_game(self.conn, "G1")["season_type"], "postseason")
+        self.assertEqual(queries.get_game(self.conn, "G1")["segment"], "postseason")
+
+    def test_includes_the_derived_season_year(self):
+        self.record("G1", "Denver", 0.5, [pred("OpenAI", 0.7)], game_date="2027-05-01")
+        self.assertEqual(queries.get_game(self.conn, "G1")["season_year"], "2026-27")
 
 
 class AccuracySummaryTests(QueriesTestCase):
@@ -140,11 +172,17 @@ class AccuracySummaryTests(QueriesTestCase):
         self.assertEqual(summary[0]["settled_n"], 25)
         self.assertGreater(summary[0]["weight"], 0.9)  # 0.9 vs outcome=1 is a very good Brier
 
-    def test_season_type_filters_the_summary(self):
+    def test_segment_filters_the_summary(self):
         self.record("G1", "Denver", 0.5, [pred("OpenAI", 0.9)], game_date="2026-10-05")
         Tracker.settle(self.conn, "G1", True)
-        self.assertEqual(queries.accuracy_summary(self.conn, season_type="postseason"), [])
-        self.assertEqual(len(queries.accuracy_summary(self.conn, season_type="preseason")), 1)
+        self.assertEqual(queries.accuracy_summary(self.conn, segment="postseason"), [])
+        self.assertEqual(len(queries.accuracy_summary(self.conn, segment="preseason")), 1)
+
+    def test_season_year_filters_the_summary_independently(self):
+        self.record("G1", "Denver", 0.5, [pred("OpenAI", 0.9)], game_date="2026-10-05")
+        Tracker.settle(self.conn, "G1", True)
+        self.assertEqual(queries.accuracy_summary(self.conn, season_year="2027-28"), [])
+        self.assertEqual(len(queries.accuracy_summary(self.conn, season_year="2026-27")), 1)
 
 
 class AiStatsTests(QueriesTestCase):
@@ -209,28 +247,41 @@ class AiStatsTests(QueriesTestCase):
         self.assertAlmostEqual(stats["brier"], Tracker.brier_scores(self.conn)["OpenAI"]["brier"])
         self.assertAlmostEqual(stats["weight"], Tracker.compute_weights(self.conn)["OpenAI"])
 
-    def test_season_type_scopes_every_stat(self):
+    def test_segment_scopes_every_stat(self):
         # Preseason: wrong every time. Regular season: right every time.
         self.record("G1", "Denver", 0.40, [pred("OpenAI", 0.10)], game_date="2026-10-05")
         Tracker.settle(self.conn, "G1", True)
         self.record("G2", "Utah", 0.40, [pred("OpenAI", 0.70)], game_date="2026-12-25")
         Tracker.settle(self.conn, "G2", True)
 
-        preseason = queries.ai_stats(self.conn, "OpenAI", season_type="preseason")
-        regular = queries.ai_stats(self.conn, "OpenAI", season_type="regular")
+        preseason = queries.ai_stats(self.conn, "OpenAI", segment="preseason")
+        regular = queries.ai_stats(self.conn, "OpenAI", segment="regular")
 
         self.assertEqual(preseason["settled_n"], 1)
         self.assertEqual(regular["settled_n"], 1)
         self.assertAlmostEqual(preseason["direction_accuracy"], 0.0)  # called it wrong
         self.assertAlmostEqual(regular["direction_accuracy"], 1.0)    # called it right
 
-    def test_season_type_with_no_matching_games_gives_none_not_an_error(self):
+    def test_segment_with_no_matching_games_gives_none_not_an_error(self):
         self.record("G1", "Denver", 0.5, [pred("OpenAI", 0.7)], game_date="2026-10-05")
         Tracker.settle(self.conn, "G1", True)
-        stats = queries.ai_stats(self.conn, "OpenAI", season_type="postseason")
+        stats = queries.ai_stats(self.conn, "OpenAI", segment="postseason")
         self.assertEqual(stats["settled_n"], 0)
         self.assertIsNone(stats["avg_edge_on_win"])
         self.assertIsNone(stats["brier"])
+
+    def test_season_year_scopes_independently_of_segment(self):
+        self.record("G1", "Denver", 0.40, [pred("OpenAI", 0.10)], game_date="2026-10-05")  # 2026-27
+        Tracker.settle(self.conn, "G1", True)
+        self.record("G2", "Utah", 0.40, [pred("OpenAI", 0.70)], game_date="2027-10-05")    # 2027-28
+        Tracker.settle(self.conn, "G2", True)
+
+        this_year = queries.ai_stats(self.conn, "OpenAI", season_year="2026-27")
+        next_year = queries.ai_stats(self.conn, "OpenAI", season_year="2027-28")
+        self.assertEqual(this_year["settled_n"], 1)
+        self.assertEqual(next_year["settled_n"], 1)
+        self.assertAlmostEqual(this_year["direction_accuracy"], 0.0)
+        self.assertAlmostEqual(next_year["direction_accuracy"], 1.0)
 
 
 class AiPredictionsTests(QueriesTestCase):
@@ -248,14 +299,24 @@ class AiPredictionsTests(QueriesTestCase):
         self.assertEqual(row["outcome"], 1)
         self.assertEqual(row["opponent"], "Utah")
 
-    def test_includes_the_derived_season_type(self):
+    def test_includes_the_derived_segment(self):
         self.record("G1", "Denver", 0.5, [pred("OpenAI", 0.7)], game_date="2026-10-05")
-        self.assertEqual(queries.ai_predictions(self.conn, "OpenAI")[0]["season_type"], "preseason")
+        self.assertEqual(queries.ai_predictions(self.conn, "OpenAI")[0]["segment"], "preseason")
 
-    def test_filters_by_season_type(self):
+    def test_filters_by_segment(self):
         self.record("G1", "Denver", 0.5, [pred("OpenAI", 0.7)], game_date="2026-10-05")  # preseason
         self.record("G2", "Utah", 0.5, [pred("OpenAI", 0.5)], game_date="2026-12-25")    # regular
-        rows = queries.ai_predictions(self.conn, "OpenAI", season_type="regular")
+        rows = queries.ai_predictions(self.conn, "OpenAI", segment="regular")
+        self.assertEqual([r["ticker"] for r in rows], ["G2"])
+
+    def test_includes_the_derived_season_year(self):
+        self.record("G1", "Denver", 0.5, [pred("OpenAI", 0.7)], game_date="2026-10-05")
+        self.assertEqual(queries.ai_predictions(self.conn, "OpenAI")[0]["season_year"], "2026-27")
+
+    def test_filters_by_season_year_independently_of_segment(self):
+        self.record("G1", "Denver", 0.5, [pred("OpenAI", 0.7)], game_date="2026-10-05")  # 2026-27
+        self.record("G2", "Utah", 0.5, [pred("OpenAI", 0.5)], game_date="2027-10-05")    # 2027-28, same segment
+        rows = queries.ai_predictions(self.conn, "OpenAI", season_year="2027-28")
         self.assertEqual([r["ticker"] for r in rows], ["G2"])
 
     def test_unknown_ai_returns_an_empty_list(self):

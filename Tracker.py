@@ -76,12 +76,15 @@ def connect(db_path: str = DEFAULT_DB) -> sqlite3.Connection:
     """
     Open (creating if needed) the predictions database.
 
-    Registers season_type(game_date) as a SQL function (backed by
-    SeasonType.classify_iso) on every connection, so queries can filter or
-    group by preseason/regular/postseason without storing it as a column --
-    it's purely derived from game_date, so a query always reflects the
-    current nba_season.json, never a stale snapshot from whenever a row was
-    inserted.
+    Registers two SQL functions on every connection, so queries can filter
+    or group by either without storing them as columns -- both are purely
+    derived from game_date, so a query always reflects the current
+    nba_season.json, never a stale snapshot from whenever a row was inserted:
+
+        segment(game_date)     -- "preseason", "regular", or "postseason"
+        season_year(game_date) -- the year-spanning season, e.g. "2026-27"
+
+    (See SeasonType.py.)
     """
     import SeasonType
 
@@ -89,7 +92,8 @@ def connect(db_path: str = DEFAULT_DB) -> sqlite3.Connection:
     conn.executescript(SCHEMA)
     _migrate(conn)
     conn.commit()
-    conn.create_function("season_type", 1, SeasonType.classify_iso)
+    conn.create_function("segment", 1, SeasonType.segment_iso)
+    conn.create_function("season_year", 1, SeasonType.season_year_iso)
     return conn
 
 
@@ -208,24 +212,32 @@ def settle_from_kalshi(
     return settled
 
 
-def brier_scores(conn: sqlite3.Connection, season_type: Optional[str] = None) -> dict[str, dict]:
+def brier_scores(
+    conn: sqlite3.Connection,
+    segment: Optional[str] = None,
+    season_year: Optional[str] = None,
+) -> dict[str, dict]:
     """
     Per-LLM accuracy over settled predictions.
 
-    Pass season_type ("preseason", "regular", or "postseason") to scope
-    this to one segment of the season instead of everything settled --
-    preseason games are inherently noisier (limited rotations, no real
-    stakes) regardless of an AI's actual skill, so mixing them in with
-    regular-season/playoff games muddies the signal either way.
+    Pass segment ("preseason", "regular", or "postseason") to scope this to
+    one part of the season instead of everything settled -- preseason games
+    are inherently noisier (limited rotations, no real stakes) regardless
+    of an AI's actual skill, so mixing them in with regular-season/playoff
+    games muddies the signal either way. Pass season_year (e.g. "2026-27")
+    to scope to one year-spanning season instead. The two combine freely.
 
     Returns {llm: {"n": count, "brier": mean squared error,
                    "market_brier": the market's own score on the same games}}.
     """
     where = "WHERE outcome IS NOT NULL"
     params: list = []
-    if season_type:
-        where += " AND season_type(game_date) = ?"
-        params.append(season_type)
+    if segment:
+        where += " AND segment(game_date) = ?"
+        params.append(segment)
+    if season_year:
+        where += " AND season_year(game_date) = ?"
+        params.append(season_year)
     rows = conn.execute(
         f"SELECT llm, COUNT(*), "
         f"       AVG((predicted_prob - outcome) * (predicted_prob - outcome)), "
@@ -245,7 +257,8 @@ def compute_weights(
     conn: sqlite3.Connection,
     min_samples: int = 20,
     default_weight: float = 1.0,
-    season_type: Optional[str] = None,
+    segment: Optional[str] = None,
+    season_year: Optional[str] = None,
 ) -> dict[str, float]:
     """
     Accuracy weight in [0, 1] for each LLM seen so far.
@@ -253,7 +266,7 @@ def compute_weights(
     An LLM with fewer than ``min_samples`` settled predictions keeps
     ``default_weight`` because a handful of games says little about skill.
 
-    season_type scopes the underlying Brier score the same way
+    segment/season_year scope the underlying Brier score the same way
     brier_scores() does -- see its docstring.
     """
     weights = {}
@@ -261,7 +274,8 @@ def compute_weights(
     for (llm,) in seen:
         weights[llm] = default_weight
 
-    for llm, stats in brier_scores(conn, season_type=season_type).items():
+    scores = brier_scores(conn, segment=segment, season_year=season_year)
+    for llm, stats in scores.items():
         if stats["n"] >= min_samples:
             weights[llm] = brier_to_weight(stats["brier"])
     return weights

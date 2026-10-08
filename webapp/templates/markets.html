@@ -14,15 +14,22 @@
         </select>
         <label for="season">Season</label>
         <select name="season" id="season" onchange="this.form.submit()">
-            <option value="" {% if not selected_season %}selected{% endif %}>All</option>
-            {% for s in season_types %}
-                <option value="{{ s }}" {% if s == selected_season %}selected{% endif %}>{{ s | capitalize }}</option>
+            <option value="" {% if not selected_season %}selected{% endif %}>All seasons</option>
+            {% for s in seasons %}
+                <option value="{{ s }}" {% if s == selected_season %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+        </select>
+        <label for="segment">Part of season</label>
+        <select name="segment" id="segment" onchange="this.form.submit()">
+            <option value="" {% if not selected_segment %}selected{% endif %}>All</option>
+            {% for s in segments %}
+                <option value="{{ s }}" {% if s == selected_segment %}selected{% endif %}>{{ s | capitalize }}</option>
             {% endfor %}
         </select>
     </form>
 
     {% if not games %}
-        <p class="empty">No markets tracked{% if selected_date %} for {{ selected_date }}{% endif %}{% if selected_season %} in the {{ selected_season }}{% endif %}{% if not selected_date and not selected_season %} yet{% endif %}.</p>
+        <p class="empty">No markets tracked{% if selected_date %} for {{ selected_date }}{% endif %}{% if selected_season %} in the {{ selected_season }} season{% endif %}{% if selected_segment %} ({{ selected_segment }}){% endif %}{% if not selected_date and not selected_season and not selected_segment %} yet{% endif %}.</p>
     {% else %}
     <table class="games">
         <thead>
@@ -41,7 +48,7 @@
                 <td>{{ g.game_date or "?" }}</td>
                 <td><a href="/markets/{{ g.ticker }}">{{ g.team }} vs {{ g.opponent or "?" }}</a></td>
                 <td>{{ (g.market_prob * 100) | round | int }}%</td>
-                <td><span class="pill season-{{ g.season_type }}">{{ g.season_type or "?" }}</span></td>
+                <td>{{ g.season_year or "?" }} <span class="pill segment-{{ g.segment }}">{{ g.segment or "?" }}</span></td>
                 <td>{{ g.ai_count }}</td>
                 <td>
                     {% if g.outcome is none %}

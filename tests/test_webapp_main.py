@@ -84,17 +84,38 @@ class MarketsPageTests(WebAppTestCase):
         self.assertIn("Denver", r.text)
         self.assertNotIn("Golden State", r.text)
 
-    def test_season_filter_excludes_other_segments(self):
+    def test_segment_filter_excludes_other_segments(self):
         self.record("G1", "Denver", 0.6, 0.7, game_date="2026-10-05")   # preseason
         self.record("G2", "Golden State", 0.5, 0.5, game_date="2026-12-25")  # regular
-        r = self.client.get("/", params={"season": "regular"})
+        r = self.client.get("/", params={"segment": "regular"})
         self.assertIn("Golden State", r.text)
         self.assertNotIn("Denver", r.text)
 
-    def test_season_dropdown_lists_every_segment(self):
+    def test_segment_dropdown_lists_every_segment(self):
         r = self.client.get("/")
-        for season in ("preseason", "regular", "postseason"):
-            self.assertIn(f'value="{season}"', r.text)
+        for segment in ("preseason", "regular", "postseason"):
+            self.assertIn(f'value="{segment}"', r.text)
+
+    def test_season_filter_excludes_other_years(self):
+        self.record("G1", "Denver", 0.6, 0.7, game_date="2026-12-25")   # 2026-27 season
+        self.record("G2", "Golden State", 0.5, 0.5, game_date="2027-12-25")  # 2027-28 season
+        r = self.client.get("/", params={"season": "2026-27"})
+        self.assertIn("Denver", r.text)
+        self.assertNotIn("Golden State", r.text)
+
+    def test_season_dropdown_lists_every_tracked_year(self):
+        self.record("G1", "Denver", 0.6, 0.7, game_date="2026-12-25")
+        r = self.client.get("/")
+        self.assertIn('value="2026-27"', r.text)
+
+    def test_season_and_segment_filters_combine(self):
+        self.record("G1", "Denver", 0.6, 0.7, game_date="2026-10-05")       # 2026-27, preseason
+        self.record("G2", "Golden State", 0.5, 0.5, game_date="2026-12-25")  # 2026-27, regular
+        self.record("G3", "Boston", 0.5, 0.5, game_date="2027-12-25")        # 2027-28, regular
+        r = self.client.get("/", params={"season": "2026-27", "segment": "regular"})
+        self.assertIn("Golden State", r.text)
+        self.assertNotIn("Denver", r.text)
+        self.assertNotIn("Boston", r.text)
 
 
 class MarketDetailPageTests(WebAppTestCase):
@@ -147,13 +168,23 @@ class AiDetailPageTests(WebAppTestCase):
         r = self.client.get("/ai/NotARealAI")
         self.assertEqual(r.status_code, 404)
 
-    def test_season_filter_scopes_the_stats_and_history(self):
+    def test_segment_filter_scopes_the_stats_and_history(self):
         self.record("G1", "Denver", 0.40, 0.10, game_date="2026-10-05")   # preseason, settled, wrong
         self.settle("G1", True)
         self.record("G2", "Utah", 0.40, 0.70, game_date="2026-12-25")     # regular, settled, right
         self.settle("G2", True)
 
-        r = self.client.get("/ai/OpenAI", params={"season": "regular"})
+        r = self.client.get("/ai/OpenAI", params={"segment": "regular"})
+        self.assertIn("Utah", r.text)
+        self.assertNotIn("Denver", r.text)
+
+    def test_season_filter_scopes_the_stats_and_history(self):
+        self.record("G1", "Denver", 0.40, 0.10, game_date="2026-12-25")   # 2026-27, settled, wrong
+        self.settle("G1", True)
+        self.record("G2", "Utah", 0.40, 0.70, game_date="2027-12-25")     # 2027-28, settled, right
+        self.settle("G2", True)
+
+        r = self.client.get("/ai/OpenAI", params={"season": "2027-28"})
         self.assertIn("Utah", r.text)
         self.assertNotIn("Denver", r.text)
 
