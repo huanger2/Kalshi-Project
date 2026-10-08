@@ -91,6 +91,33 @@ class MarketDetailPageTests(WebAppTestCase):
         self.assertEqual(r.status_code, 404)
 
 
+class AiDetailPageTests(WebAppTestCase):
+    def test_shows_stats_and_the_prediction_history(self):
+        self.record("G1", "Denver", 0.40, 0.70, opponent="Utah", game_date="2026-10-04")
+        r = self.client.get("/ai/OpenAI")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("OpenAI", r.text)
+        self.assertIn("Denver", r.text)
+
+    def test_empty_state_before_anything_settles(self):
+        r = self.client.get("/ai/OpenAI")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("No settled games yet", r.text)
+
+    def test_is_case_insensitive(self):
+        r = self.client.get("/ai/openai")
+        self.assertEqual(r.status_code, 200)
+
+    def test_unknown_ai_is_a_404(self):
+        r = self.client.get("/ai/NotARealAI")
+        self.assertEqual(r.status_code, 404)
+
+    def test_nav_tabs_link_to_every_ai(self):
+        r = self.client.get("/ai/OpenAI")
+        for name in ("OpenAI", "Claude", "Gemini"):
+            self.assertIn(f'href="/ai/{name}"', r.text)
+
+
 class JsonApiTests(WebAppTestCase):
     def test_api_markets_returns_json(self):
         self.record("G1", "Denver", 0.6, 0.7, opponent="Utah")
@@ -114,6 +141,18 @@ class JsonApiTests(WebAppTestCase):
         r = self.client.get("/api/accuracy")
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json(), [])
+
+    def test_api_ai_detail_returns_stats_and_predictions(self):
+        self.record("G1", "Denver", 0.40, 0.70)
+        r = self.client.get("/api/ai/OpenAI")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body["stats"]["llm"], "OpenAI")
+        self.assertEqual(len(body["predictions"]), 1)
+
+    def test_api_ai_detail_404_for_unknown_ai(self):
+        r = self.client.get("/api/ai/NotARealAI")
+        self.assertEqual(r.status_code, 404)
 
 
 if __name__ == "__main__":

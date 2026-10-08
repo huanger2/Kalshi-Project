@@ -104,6 +104,90 @@ def get_game(conn: sqlite3.Connection, ticker: str) -> Optional[dict]:
     }
 
 
+def ai_stats(conn: sqlite3.Connection, llm: str) -> dict:
+    """
+    One AI's calibration/accuracy picture, over its settled games:
+
+    - avg_edge_on_win / avg_edge_on_loss: the average (predicted - market)
+      edge, split by what actually happened. A skilled AI's edge should
+      point the right way *in advance* of the outcome: positive on games
+      the team went on to win, negative on games it went on to lose. Edge
+      numbers that look similar either way mean the edge isn't actually
+      predictive, whatever the raw Brier score says.
+    - direction_accuracy: how often the AI's >50%/<50% call matched the
+      winner, regardless of margin -- market_direction_accuracy is the
+      same thing for Kalshi's own price, for comparison. A predicted_prob
+      of exactly 0.50 counts as not having called a side.
+
+    Any stat computed from zero rows comes back as None, not 0 -- "no data
+    yet" and "exactly zero" are different things here.
+    """
+    import Tracker
+
+    total_n, settled_n = conn.execute(
+        "SELECT COUNT(*), COALESCE(SUM(CASE WHEN outcome IS NOT NULL THEN 1 ELSE 0 END), 0) "
+        "FROM predictions WHERE llm = ?",
+        (llm,),
+    ).fetchone()
+
+    (avg_edge_on_win, avg_edge_on_loss, direction_accuracy,
+     market_direction_accuracy, avg_confidence) = conn.execute(
+        "SELECT "
+        "  AVG(CASE WHEN outcome = 1 THEN predicted_prob - market_prob END), "
+        "  AVG(CASE WHEN outcome = 0 THEN predicted_prob - market_prob END), "
+        "  AVG(CASE WHEN (predicted_prob > 0.5 AND outcome = 1) OR (predicted_prob < 0.5 AND outcome = 0) "
+        "       THEN 1.0 ELSE 0.0 END), "
+        "  AVG(CASE WHEN (market_prob > 0.5 AND outcome = 1) OR (market_prob < 0.5 AND outcome = 0) "
+        "       THEN 1.0 ELSE 0.0 END), "
+        "  AVG(confidence) "
+        "FROM predictions WHERE llm = ? AND outcome IS NOT NULL",
+        (llm,),
+    ).fetchone()
+
+    scores = Tracker.brier_scores(conn).get(llm)
+    weight = Tracker.compute_weights(conn).get(llm, 1.0)
+
+    return {
+        "llm": llm,
+        "total_n": total_n,
+        "settled_n": settled_n,
+        "pending_n": total_n - settled_n,
+        "brier": scores["brier"] if scores else None,
+        "market_brier": scores["market_brier"] if scores else None,
+        "weight": weight,
+        "avg_edge_on_win": avg_edge_on_win,
+        "avg_edge_on_loss": avg_edge_on_loss,
+        "direction_accuracy": direction_accuracy,
+        "market_direction_accuracy": market_direction_accuracy,
+        "avg_confidence": avg_confidence,
+    }
+
+
+def ai_predictions(conn: sqlite3.Connection, llm: str) -> list[dict]:
+    """Every prediction this AI has made, newest game first, with its edge vs the market."""
+    rows = conn.execute(
+        "SELECT ticker, game_date, team, opponent, model, predicted_prob, confidence, market_prob, outcome "
+        "FROM predictions WHERE llm = ? ORDER BY game_date DESC, ticker",
+        (llm,),
+    ).fetchall()
+    return [
+        {
+            "ticker": ticker,
+            "game_date": game_date,
+            "team": team,
+            "opponent": opponent,
+            "model": model,
+            "predicted_prob": predicted_prob,
+            "confidence": confidence,
+            "market_prob": market_prob,
+            "outcome": outcome,
+            "edge": predicted_prob - market_prob,
+        }
+        for (ticker, game_date, team, opponent, model, predicted_prob, confidence,
+             market_prob, outcome) in rows
+    ]
+
+
 def accuracy_summary(conn: sqlite3.Connection) -> list[dict]:
     """Each AI's Brier score / weight so far, for display alongside the market's own."""
     import Tracker

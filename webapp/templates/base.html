@@ -11,6 +11,12 @@
         <a class="brand" href="/">AI vs Kalshi</a>
         <span class="tagline">NBA prediction markets, compared</span>
     </header>
+    <nav class="tabs">
+        <a href="/" class="{% if active_tab == 'markets' %}active{% endif %}">Markets</a>
+        {% for name in ai_names %}
+            <a href="/ai/{{ name }}" class="{% if active_tab == name %}active{% endif %}">{{ name }}</a>
+        {% endfor %}
+    </nav>
     <main>
         {% block content %}{% endblock %}
     </main>

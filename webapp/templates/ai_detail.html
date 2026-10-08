@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}{{ stats.llm }} - AI vs Kalshi{% endblock %}
+{% block content %}
+
+<section class="panel">
+    <h1>{{ stats.llm }}</h1>
+    <p class="subtitle">
+        {{ stats.settled_n }} settled game{{ "" if stats.settled_n == 1 else "s" }},
+        {{ stats.pending_n }} pending
+    </p>
+
+    {% if stats.settled_n == 0 %}
+        <p class="empty">No settled games yet -- stats below will fill in as today's and earlier
+            games are decided.</p>
+    {% else %}
+    <div class="stats-grid">
+        <div class="stat">
+            <span class="label">Avg edge when team won</span>
+            <span class="value {% if stats.avg_edge_on_win > 0 %}edge-up{% elif stats.avg_edge_on_win < 0 %}edge-down{% endif %}">
+                {{ "%+.1f" | format(stats.avg_edge_on_win * 100) }}pp
+            </span>
+            <span class="sub">positive is good here</span>
+        </div>
+        <div class="stat">
+            <span class="label">Avg edge when team lost</span>
+            <span class="value {% if stats.avg_edge_on_loss < 0 %}edge-up{% elif stats.avg_edge_on_loss > 0 %}edge-down{% endif %}">
+                {{ "%+.1f" | format(stats.avg_edge_on_loss * 100) }}pp
+            </span>
+            <span class="sub">negative is good here</span>
+        </div>
+        <div class="stat">
+            <span class="label">Called the winner</span>
+            <span class="value">{{ (stats.direction_accuracy * 100) | round | int }}%</span>
+            <span class="sub">market: {{ (stats.market_direction_accuracy * 100) | round | int }}%</span>
+        </div>
+        <div class="stat">
+            <span class="label">Brier score</span>
+            <span class="value">{{ "%.4f" | format(stats.brier) }}</span>
+            <span class="sub">market: {{ "%.4f" | format(stats.market_brier) }}</span>
+        </div>
+        <div class="stat">
+            <span class="label">EV weight</span>
+            <span class="value">{{ "%.2f" | format(stats.weight) }}</span>
+            <span class="sub">of 1.00</span>
+        </div>
+        <div class="stat">
+            <span class="label">Avg confidence</span>
+            <span class="value">{{ (stats.avg_confidence * 100) | round | int }}%</span>
+        </div>
+    </div>
+    <p class="note">
+        Edge is this AI's predicted win % minus Kalshi's, computed before the game was decided.
+        A skilled, well-calibrated AI should show a <em>positive</em> average edge on games its
+        pick went on to win and a <em>negative</em> one on games it went on to lose -- edge that
+        looks the same either way isn't actually predictive, whatever the Brier score says.
+        "Called the winner" counts a &gt;50%/&lt;50% pick that matched the outcome, regardless of
+        margin; exactly 50% doesn't count as calling either side. Weight only reflects Brier score
+        once this AI has 20+ settled games (see Tracker.py) -- until then it defaults to 1.00.
+    </p>
+    {% endif %}
+</section>
+
+<section class="panel">
+    <h2>Every prediction</h2>
+    {% if not predictions %}
+        <p class="empty">Nothing logged for {{ stats.llm }} yet.</p>
+    {% else %}
+    <table class="predictions">
+        <thead>
+            <tr>
+                <th>Date</th>
+                <th>Matchup</th>
+                <th>Model</th>
+                <th>Predicted</th>
+                <th>Confidence</th>
+                <th>Market</th>
+                <th>Edge</th>
+                <th>Result</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for p in predictions %}
+            <tr>
+                <td>{{ p.game_date or "?" }}</td>
+                <td><a href="/markets/{{ p.ticker }}">{{ p.team }} vs {{ p.opponent or "?" }}</a></td>
+                <td class="model">{{ p.model or "?" }}</td>
+                <td>{{ (p.predicted_prob * 100) | round | int }}%</td>
+                <td>{{ (p.confidence * 100) | round | int }}%</td>
+                <td>{{ (p.market_prob * 100) | round | int }}%</td>
+                <td class="{% if p.edge > 0 %}edge-up{% elif p.edge < 0 %}edge-down{% endif %}">
+                    {{ "%+.0f" | format(p.edge * 100) }}pp
+                </td>
+                <td>
+                    {% if p.outcome is none %}
+                        <span class="pill pending">pending</span>
+                    {% elif p.outcome == 1 %}
+                        <span class="pill won">won</span>
+                    {% else %}
+                        <span class="pill lost">lost</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+</section>
+
+{% endblock %}

@@ -42,6 +42,29 @@ body {
     font-size: 0.85rem;
 }
 
+.tabs {
+    display: flex;
+    gap: 0.25rem;
+    padding: 0 1.5rem;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+}
+
+.tabs a {
+    display: inline-block;
+    padding: 0.65rem 0.9rem;
+    color: var(--muted);
+    text-decoration: none;
+    font-size: 0.88rem;
+    font-weight: 600;
+    border-bottom: 2px solid transparent;
+    white-space: nowrap;
+}
+
+.tabs a:hover { color: var(--text); }
+.tabs a.active { color: var(--accent); border-bottom-color: var(--accent); }
+
 main {
     max-width: 960px;
     margin: 0 auto;
@@ -107,6 +130,34 @@ table a:hover { text-decoration: underline; }
 
 .note { color: var(--muted); font-size: 0.82rem; margin-top: 0.75rem; }
 .empty { color: var(--muted); }
+
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 0.75rem;
+    margin-bottom: 0.5rem;
+}
+
+.stat {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.75rem 0.9rem;
+}
+
+.stat .label {
+    display: block;
+    color: var(--muted);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    margin-bottom: 0.2rem;
+}
+
+.stat .value { font-size: 1.3rem; font-weight: 700; }
+.stat .sub { color: var(--muted); font-size: 0.78rem; }
+.stat .value.edge-up { color: var(--won); }
+.stat .value.edge-down { color: var(--lost); }
 
 /* phones */
 @media (max-width: 480px) {

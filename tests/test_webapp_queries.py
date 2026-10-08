@@ -121,5 +121,88 @@ class AccuracySummaryTests(QueriesTestCase):
         self.assertGreater(summary[0]["weight"], 0.9)  # 0.9 vs outcome=1 is a very good Brier
 
 
+class AiStatsTests(QueriesTestCase):
+    def test_unseen_ai_has_zero_counts_and_none_stats(self):
+        stats = queries.ai_stats(self.conn, "OpenAI")
+        self.assertEqual(stats["total_n"], 0)
+        self.assertEqual(stats["settled_n"], 0)
+        self.assertEqual(stats["pending_n"], 0)
+        self.assertIsNone(stats["avg_edge_on_win"])
+        self.assertIsNone(stats["brier"])
+        self.assertEqual(stats["weight"], 1.0)  # the project-wide default
+
+    def test_pending_n_excludes_unsettled_games(self):
+        self.record("G1", "Denver", 0.5, [pred("OpenAI", 0.6)])
+        self.record("G2", "Utah", 0.5, [pred("OpenAI", 0.6)])
+        Tracker.settle(self.conn, "G1", True)
+        stats = queries.ai_stats(self.conn, "OpenAI")
+        self.assertEqual(stats["total_n"], 2)
+        self.assertEqual(stats["settled_n"], 1)
+        self.assertEqual(stats["pending_n"], 1)
+
+    def test_avg_edge_on_win_only_averages_wins(self):
+        self.record("G1", "Denver", 0.40, [pred("OpenAI", 0.70)])  # edge +0.30
+        self.record("G2", "Utah", 0.40, [pred("OpenAI", 0.50)])    # edge +0.10
+        self.record("G3", "Golden State", 0.60, [pred("OpenAI", 0.30)])  # a loss; must not count
+        Tracker.settle(self.conn, "G1", True)
+        Tracker.settle(self.conn, "G2", True)
+        Tracker.settle(self.conn, "G3", False)
+        self.assertAlmostEqual(queries.ai_stats(self.conn, "OpenAI")["avg_edge_on_win"], 0.20)
+
+    def test_avg_edge_on_loss_only_averages_losses(self):
+        self.record("G1", "Denver", 0.70, [pred("OpenAI", 0.30)])  # edge -0.40, a loss
+        self.record("G2", "Utah", 0.60, [pred("OpenAI", 0.70)])    # a win; must not count
+        Tracker.settle(self.conn, "G1", False)
+        Tracker.settle(self.conn, "G2", True)
+        self.assertAlmostEqual(queries.ai_stats(self.conn, "OpenAI")["avg_edge_on_loss"], -0.40)
+
+    def test_direction_accuracy_counts_above_fifty_calls_that_matched(self):
+        self.record("G1", "Denver", 0.5, [pred("OpenAI", 0.70)])  # called it, right
+        self.record("G2", "Utah", 0.5, [pred("OpenAI", 0.70)])    # called it, wrong
+        self.record("G3", "Golden State", 0.5, [pred("OpenAI", 0.30)])  # called against it, right
+        Tracker.settle(self.conn, "G1", True)
+        Tracker.settle(self.conn, "G2", False)
+        Tracker.settle(self.conn, "G3", False)
+        self.assertAlmostEqual(queries.ai_stats(self.conn, "OpenAI")["direction_accuracy"], 2 / 3)
+
+    def test_an_exact_fifty_percent_call_does_not_count_as_correct(self):
+        self.record("G1", "Denver", 0.5, [pred("OpenAI", 0.50)])
+        Tracker.settle(self.conn, "G1", True)
+        self.assertAlmostEqual(queries.ai_stats(self.conn, "OpenAI")["direction_accuracy"], 0.0)
+
+    def test_market_direction_accuracy_is_scored_the_same_way(self):
+        self.record("G1", "Denver", 0.70, [pred("OpenAI", 0.1)])  # market called it; right
+        Tracker.settle(self.conn, "G1", True)
+        self.assertAlmostEqual(queries.ai_stats(self.conn, "OpenAI")["market_direction_accuracy"], 1.0)
+
+    def test_weight_and_brier_match_tracker(self):
+        for i in range(25):
+            self.record(f"G{i}", "Denver", 0.5, [pred("OpenAI", 0.9)])
+            Tracker.settle(self.conn, f"G{i}", True)
+        stats = queries.ai_stats(self.conn, "OpenAI")
+        self.assertAlmostEqual(stats["brier"], Tracker.brier_scores(self.conn)["OpenAI"]["brier"])
+        self.assertAlmostEqual(stats["weight"], Tracker.compute_weights(self.conn)["OpenAI"])
+
+
+class AiPredictionsTests(QueriesTestCase):
+    def test_only_that_ais_rows_come_back(self):
+        self.record("G1", "Denver", 0.5, [pred("OpenAI", 0.7), pred("Claude", 0.4)])
+        rows = queries.ai_predictions(self.conn, "OpenAI")
+        self.assertEqual(len(rows), 1)
+        self.assertAlmostEqual(rows[0]["predicted_prob"], 0.7)  # OpenAI's, not Claude's 0.4
+
+    def test_includes_edge_and_outcome(self):
+        self.record("G1", "Denver", 0.40, [pred("OpenAI", 0.70)], opponent="Utah")
+        Tracker.settle(self.conn, "G1", True)
+        row = queries.ai_predictions(self.conn, "OpenAI")[0]
+        self.assertAlmostEqual(row["edge"], 0.30)
+        self.assertEqual(row["outcome"], 1)
+        self.assertEqual(row["opponent"], "Utah")
+
+    def test_unknown_ai_returns_an_empty_list(self):
+        self.record("G1", "Denver", 0.5, [pred("OpenAI", 0.7)])
+        self.assertEqual(queries.ai_predictions(self.conn, "NotTracked"), [])
+
+
 if __name__ == "__main__":
     unittest.main()
