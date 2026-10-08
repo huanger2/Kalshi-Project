@@ -20,6 +20,62 @@ class TrackerTestCase(unittest.TestCase):
         Tracker.record_predictions(self.conn, market(ticker), market_prob, [pred(llm, prob)])
 
 
+class EnrichedFieldsTests(TrackerTestCase):
+    """The extra columns added to back the webapp's 'AI vs Kalshi' views."""
+
+    def test_team_is_read_from_the_market_dict(self):
+        m = dict(market("G1"), yes_sub_title="Denver")
+        Tracker.record_predictions(self.conn, m, 0.5, [pred("OpenAI", 0.6)])
+        row = self.conn.execute("SELECT team FROM predictions").fetchone()
+        self.assertEqual(row[0], "Denver")
+
+    def test_optional_context_fields_are_stored(self):
+        Tracker.record_predictions(
+            self.conn, market("G1"), 0.5, [pred("OpenAI", 0.6)],
+            opponent="Utah", yes_bid=0.58, yes_ask=0.60, game_date="2026-10-07",
+        )
+        row = self.conn.execute(
+            "SELECT opponent, yes_bid, yes_ask, game_date FROM predictions"
+        ).fetchone()
+        self.assertEqual(row, ("Utah", 0.58, 0.60, "2026-10-07"))
+
+    def test_model_is_looked_up_for_a_real_provider(self):
+        Tracker.record_predictions(self.conn, market("G1"), 0.5, [pred("OpenAI", 0.6)])
+        model = self.conn.execute("SELECT model FROM predictions").fetchone()[0]
+        from AISettings import get_model
+        self.assertEqual(model, get_model("openai"))
+
+    def test_an_unrecognized_llm_name_still_records_with_no_model(self):
+        # Test fixtures elsewhere use made-up names like "Sharp"/"A" -- that
+        # must not stop the prediction itself from being recorded.
+        Tracker.record_predictions(self.conn, market("G1"), 0.5, [pred("NotARealProvider", 0.6)])
+        row = self.conn.execute("SELECT llm, model, predicted_prob FROM predictions").fetchone()
+        self.assertEqual(row, ("NotARealProvider", None, 0.6))
+
+    def test_an_older_database_without_the_new_columns_is_migrated_in_place(self):
+        import sqlite3
+        conn = sqlite3.connect(":memory:")
+        conn.executescript(
+            "CREATE TABLE predictions ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL, ticker TEXT NOT NULL,"
+            " event_ticker TEXT, title TEXT, llm TEXT NOT NULL, predicted_prob REAL NOT NULL,"
+            " confidence REAL NOT NULL, market_prob REAL NOT NULL, outcome INTEGER, settled_at TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO predictions (created_at, ticker, llm, predicted_prob, confidence, market_prob) "
+            "VALUES ('t', 'G1', 'OpenAI', 0.6, 0.8, 0.5)"
+        )
+        conn.commit()
+
+        Tracker._migrate(conn)  # what connect() runs internally
+        conn.commit()
+
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(predictions)")}
+        self.assertTrue({"team", "opponent", "game_date", "yes_bid", "yes_ask", "model"} <= columns)
+        # The pre-existing row survives the migration untouched.
+        self.assertEqual(conn.execute("SELECT ticker, llm FROM predictions").fetchone(), ("G1", "OpenAI"))
+
+
 class RecordAndSettleTests(TrackerTestCase):
     def test_record_stores_one_row_per_llm(self):
         n = Tracker.record_predictions(

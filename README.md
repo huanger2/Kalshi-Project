@@ -10,7 +10,7 @@ market before any real money is bet.
 Requires Python 3.10+.
 
 ```powershell
-pip install requests python-dotenv pandas openpyxl openai google-genai
+pip install requests python-dotenv pandas openpyxl openai google-genai fastapi uvicorn jinja2 python-multipart
 ```
 
 Optional: `cryptography` (only for Kalshi's authenticated endpoints).
@@ -106,6 +106,41 @@ that's normally on. To also run while logged off: open Task Scheduler, find
 the task, Properties > General > "Run whether user is logged on or not",
 and enter your password when prompted.
 
+## Browsing the data (webapp)
+
+The long-term goal of this project: a webapp to look through tracked
+markets and compare each AI's prediction against Kalshi's price, instead of
+digging through spreadsheets. [`webapp/`](webapp/) is the first pass at
+that framework.
+
+```powershell
+python -m uvicorn webapp.main:app --reload
+```
+
+Then open <http://127.0.0.1:8000/>. It reads `predictions.db` directly (see
+[`Tracker.py`](Tracker.py)) -- the one table `DailyLog.py` and `Collect.py`
+both write into as they run, so the page is always current with no refresh
+step of its own. It lists tracked games (filterable by date), a detail page
+per game showing every AI's prediction next to Kalshi's price and the
+"edge" between them, and a running accuracy/weight summary per AI. A couple
+of JSON endpoints (`/api/markets`, `/api/markets/{ticker}`, `/api/accuracy`)
+sit alongside the HTML pages for whatever consumes this next.
+
+If you have `daily_logs/*.xlsx` files from before `DailyLog.py` started
+writing to `predictions.db` directly, backfill them once:
+
+```powershell
+python MigrateDailyLogs.py
+```
+
+Safe to re-run -- it only inserts rows for a (ticker, AI) pair it hasn't
+seen before, so running it again after a new day's file appears just adds
+that day.
+
+This is a first framework pass, not a finished product: no auth, no
+pagination, plain server-rendered pages. Treat it as the foundation to
+build the "look at different markets" experience on, not the end state.
+
 ## Email alerts when an AI runs out of funds
 
 [`Notifier.py`](Notifier.py) emails you whenever an AI API call fails with
@@ -199,7 +234,9 @@ day's run catches it up.
 | `AISettings.py`, `ai_settings.json` | Which model each AI uses |
 | `Probability.py` | Builds the prompt, parses AI replies, runs the EV analysis |
 | `EVCalculator.py` | Confidence-weighted expected-value score vs. the market price |
-| `Tracker.py`, `Export.py`, `Collect.py` | SQLite prediction tracking, accuracy weights, Excel export |
+| `Tracker.py`, `Export.py`, `Collect.py` | SQLite prediction tracking (the webapp's data source too), accuracy weights, Excel export |
+| `webapp/` | FastAPI app for browsing tracked markets and AI-vs-Kalshi comparisons |
+| `MigrateDailyLogs.py` | One-time backfill of `daily_logs/*.xlsx` into `predictions.db` |
 | `Notifier.py` | Emails an alert when an AI API call looks like a billing/quota failure |
 | `CostTracker.py`, `CostExport.py`, `model_pricing.json` | Token-based API spend estimate and Excel export |
 | `ExcelUtil.py` | Shared workbook-writing helper used by `Export.py` and `CostExport.py` |

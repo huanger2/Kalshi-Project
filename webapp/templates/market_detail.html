@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}{{ game.team }} vs {{ game.opponent }} - AI vs Kalshi{% endblock %}
+{% block content %}
+
+<a class="back" href="/">&larr; All markets</a>
+
+<section class="panel">
+    <h1>{{ game.team }} vs {{ game.opponent or "?" }}</h1>
+    <p class="subtitle">{{ game.game_date or "date unknown" }} &middot; {{ game.ticker }}</p>
+
+    <dl class="facts">
+        <dt>Kalshi bid / ask</dt>
+        <dd>
+            {% if game.yes_bid is not none and game.yes_ask is not none %}
+                {{ (game.yes_bid * 100) | round | int }}&cent; / {{ (game.yes_ask * 100) | round | int }}&cent;
+            {% else %}n/a{% endif %}
+        </dd>
+        <dt>Kalshi implied win %</dt>
+        <dd>{{ (game.market_prob * 100) | round | int }}%</dd>
+        <dt>Result</dt>
+        <dd>
+            {% if game.outcome is none %}
+                <span class="pill pending">pending</span>
+            {% elif game.outcome == 1 %}
+                <span class="pill won">{{ game.team }} won</span>
+            {% else %}
+                <span class="pill lost">{{ game.team }} lost</span>
+            {% endif %}
+        </dd>
+    </dl>
+</section>
+
+<section class="panel">
+    <h2>AI vs Kalshi</h2>
+    <table class="predictions">
+        <thead>
+            <tr>
+                <th>AI</th>
+                <th>Model</th>
+                <th>Predicted win %</th>
+                <th>Confidence</th>
+                <th>Edge vs market</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for p in game.predictions %}
+            <tr>
+                <td>{{ p.llm }}</td>
+                <td class="model">{{ p.model or "?" }}</td>
+                <td>{{ (p.predicted_prob * 100) | round | int }}%</td>
+                <td>{{ (p.confidence * 100) | round | int }}%</td>
+                <td class="{% if p.edge > 0 %}edge-up{% elif p.edge < 0 %}edge-down{% endif %}">
+                    {{ "%+.0f" | format(p.edge * 100) }}pp
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <p class="note">Edge is the AI's predicted win % minus Kalshi's: positive means
+        the AI thought {{ game.team }} was more likely to win than the market priced it.</p>
+</section>
+
+{% endblock %}

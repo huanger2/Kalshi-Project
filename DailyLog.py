@@ -35,6 +35,7 @@ specific AIs, since --force re-spends on every row for the ones it covers.
 import datetime
 import itertools
 import os
+import sqlite3
 import sys
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -45,6 +46,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 import CostExport
+import Tracker
 from AISettings import get_model
 from Kalshi import get_market, get_nba_results, get_prices, get_todays_nba_games, implied_yes_prob
 from Probability import build_prompt, default_llms, parse_response, query_llms
@@ -254,8 +256,16 @@ def fill_results(
     df: pd.DataFrame,
     today: datetime.date,
     fetch_results: Optional[Callable[[datetime.date], list[dict]]] = None,
+    db_conn: Optional[sqlite3.Connection] = None,
 ) -> int:
-    """Fill winner / team_won for pending games before `today`. Returns rows settled."""
+    """
+    Fill winner / team_won for pending games before `today`. Returns rows settled.
+
+    If `db_conn` is given, the matching predictions.db rows are settled too
+    (see Tracker.settle()) so the webapp's accuracy numbers stay in sync with
+    the spreadsheet. A failure there is printed, not raised -- the result
+    still belongs in the spreadsheet even if the database write fails.
+    """
     fetch_results = fetch_results or get_nba_results
     pending = df["winner"].isna() & (df["game_date"] < today.isoformat())
     settled = 0
@@ -265,10 +275,16 @@ def fill_results(
             result = results.get(df.at[idx, "event_ticker"])
             if result is None:
                 continue
+            team_won = df.at[idx, "team"] == result["winner"]
             df.at[idx, "winner"] = result["winner"]
-            df.at[idx, "team_won"] = int(df.at[idx, "team"] == result["winner"])
+            df.at[idx, "team_won"] = int(team_won)
             df.at[idx, "settled_at"] = _now()
             settled += 1
+            if db_conn is not None:
+                try:
+                    Tracker.settle(db_conn, df.at[idx, "ticker"], team_won)
+                except Exception as e:
+                    print(f"could not settle {df.at[idx, 'ticker']} in predictions.db: {e}")
     return settled
 
 
@@ -276,8 +292,16 @@ def todays_rows(
     today: datetime.date,
     already_logged: set[str],
     llms: list[tuple[str, Callable[[str], str]]],
+    db_conn: Optional[sqlite3.Connection] = None,
 ) -> list[dict]:
-    """One row per game today that isn't logged yet and is still open for trading."""
+    """
+    One row per game today that isn't logged yet and is still open for trading.
+
+    If `db_conn` is given, each game's predictions are also stored in
+    predictions.db (see Tracker.record_predictions()) -- the table the
+    webapp queries. A failure there is printed, not raised: the spreadsheet
+    row is still the thing that matters if the database write fails.
+    """
     games: dict[str, list[dict]] = {}
     for market in get_todays_nba_games(today):
         games.setdefault(market["event_ticker"], []).append(market)
@@ -298,16 +322,18 @@ def todays_rows(
             continue
 
         prices = get_prices(market)
+        market_prob = implied_yes_prob(market)
+        opponent = next((m.get("yes_sub_title") for m in markets[1:]), None)
         row = {
             "game_date": today.isoformat(),
             "event_ticker": event,
             "ticker": market["ticker"],
             "team": market.get("yes_sub_title"),
-            "opponent": next((m.get("yes_sub_title") for m in markets[1:]), None),
+            "opponent": opponent,
             "logged_at": _now(),
             "yes_bid": prices["yes_bid"],
             "yes_ask": prices["yes_ask"],
-            "market_prob": implied_yes_prob(market),
+            "market_prob": market_prob,
         }
         for p in predictions:
             key = p.llm_name.lower()
@@ -316,6 +342,16 @@ def todays_rows(
             row[f"{key}_model"] = get_model(key)
         rows.append(row)
         print(f"logged {event}: {row['team']} vs {row['opponent']}")
+
+        if db_conn is not None:
+            try:
+                Tracker.record_predictions(
+                    db_conn, market, market_prob, predictions,
+                    opponent=opponent, yes_bid=prices["yes_bid"], yes_ask=prices["yes_ask"],
+                    game_date=today.isoformat(),
+                )
+            except Exception as e:
+                print(f"could not record {event} in predictions.db: {e}")
     return rows
 
 
@@ -407,28 +443,36 @@ def run(
     folder: str = DEFAULT_DIR,
     today: Optional[datetime.date] = None,
     llms: Optional[list[tuple[str, Callable[[str], str]]]] = None,
+    db_path: str = Tracker.DEFAULT_DB,
 ) -> tuple[int, int]:
     """
     Fill in results in earlier days' files, then write today's games to
     today's file. Returns (games settled, games logged).
+
+    Every game is also recorded in predictions.db (db_path) as it's logged
+    or settled -- the single table the webapp/ package queries, so it never
+    falls behind the spreadsheet. Pass db_path=":memory:" (or any throwaway
+    path) to skip persisting that -- e.g. in tests that only care about the
+    spreadsheet.
     """
     today = today or datetime.date.today()
     llms = llms or default_llms()
     llm_names = [name for name, _ in llms]
     os.makedirs(folder, exist_ok=True)
+    db_conn = Tracker.connect(db_path)
 
     settled = 0
     for day in earlier_days(folder, today):
         path = path_for(day, folder)
         df = load(path)
-        n = fill_results(df, today)
+        n = fill_results(df, today, db_conn=db_conn)
         if n:
             save(df, path, llm_names)
             settled += n
 
     path = path_for(today, folder)
     df = load(path)
-    new_rows = todays_rows(today, set(df["event_ticker"].dropna()), llms)
+    new_rows = todays_rows(today, set(df["event_ticker"].dropna()), llms, db_conn=db_conn)
     if new_rows:
         new = pd.DataFrame(new_rows)
         df = new if df.empty else pd.concat([df, new], ignore_index=True)
@@ -446,6 +490,7 @@ def run(
     except Exception as e:
         print(f"could not update cost spreadsheet: {e}")
 
+    db_conn.close()  # Windows can't reopen/export predictions.db while this is open
     return settled, len(new_rows)
 
 

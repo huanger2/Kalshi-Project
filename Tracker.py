@@ -4,6 +4,12 @@ Tracker.py
 Accumulates LLM predictions in a local SQLite file and, once the markets
 settle, turns them into a 0-1 accuracy weight per LLM.
 
+This is the single table meant to back everything that queries "AI vs
+Kalshi" data -- the webapp/ package queries it directly. DailyLog.py and
+Collect.py both write into it (see record_predictions()); DailyLog.py's
+daily_logs/*.xlsx stays as a human-friendly export, not a second source of
+truth -- migrate_daily_logs.py backfills any days that predate this table.
+
 Accuracy is measured with the Brier score: the mean of (p - outcome)^2 over
 settled predictions, where p is the LLM's probability that YES resolves and
 outcome is 1 (YES) or 0 (NO). Lower is better. Always answering 50% scores
@@ -29,7 +35,13 @@ CREATE TABLE IF NOT EXISTS predictions (
     ticker         TEXT    NOT NULL,
     event_ticker   TEXT,
     title          TEXT,
+    team           TEXT,             -- the side this row's prediction is about
+    opponent       TEXT,
+    game_date      TEXT,             -- scheduled (US) game date, ISO; may differ from created_at
+    yes_bid        REAL,
+    yes_ask        REAL,
     llm            TEXT    NOT NULL,
+    model          TEXT,             -- which model (ai_settings.json) produced this prediction
     predicted_prob REAL    NOT NULL,
     confidence     REAL    NOT NULL,
     market_prob    REAL    NOT NULL,
@@ -37,7 +49,23 @@ CREATE TABLE IF NOT EXISTS predictions (
     settled_at     TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_predictions_ticker ON predictions (ticker);
+CREATE INDEX IF NOT EXISTS idx_predictions_event ON predictions (event_ticker);
 """
+
+# Columns added after the table first shipped. CREATE TABLE IF NOT EXISTS
+# above only applies to a brand-new file; an existing predictions.db from
+# before these columns existed needs them added explicitly.
+_MIGRATED_COLUMNS = {
+    "team": "TEXT", "opponent": "TEXT", "game_date": "TEXT",
+    "yes_bid": "REAL", "yes_ask": "REAL", "model": "TEXT",
+}
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(predictions)")}
+    for column, sql_type in _MIGRATED_COLUMNS.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE predictions ADD COLUMN {column} {sql_type}")
 
 
 def _now() -> str:
@@ -48,6 +76,8 @@ def connect(db_path: str = DEFAULT_DB) -> sqlite3.Connection:
     """Open (creating if needed) the predictions database."""
     conn = sqlite3.connect(db_path)
     conn.executescript(SCHEMA)
+    _migrate(conn)
+    conn.commit()
     return conn
 
 
@@ -56,26 +86,53 @@ def record_predictions(
     market: dict,
     market_prob: float,
     predictions: list,
+    opponent: Optional[str] = None,
+    yes_bid: Optional[float] = None,
+    yes_ask: Optional[float] = None,
+    game_date: Optional[str] = None,
 ) -> int:
     """
     Store one row per LLM prediction for a market.
 
     Args:
-        market:      Kalshi market dict (needs "ticker"; "event_ticker"/"title" optional).
+        market:      Kalshi market dict (needs "ticker"; "event_ticker"/"title"/
+                     "yes_sub_title" optional, the last giving `team`).
         market_prob: The market's implied YES probability at the time of the query.
         predictions: LLMPrediction objects (llm_name, predicted_prob, confidence).
+        opponent, yes_bid, yes_ask, game_date:
+                     Optional context a caller may already have on hand (e.g.
+                     DailyLog.py knows the sibling team and today's date; a bare
+                     Probability.analyze_market() call may not).
 
     Returns:
         Number of rows inserted.
     """
+    from AISettings import get_model
+
+    def model_for(llm_name: str) -> Optional[str]:
+        # Best-effort: an llm_name that isn't a real configured provider (test
+        # fixtures use made-up names) shouldn't stop the prediction itself
+        # from being recorded.
+        try:
+            return get_model(llm_name.lower())
+        except (KeyError, ValueError):
+            return None
+
     now = _now()
+    team = market.get("yes_sub_title")
     rows = [
         (
             now,
             market["ticker"],
             market.get("event_ticker"),
             market.get("title"),
+            team,
+            opponent,
+            game_date,
+            yes_bid,
+            yes_ask,
             p.llm_name,
+            model_for(p.llm_name),
             p.predicted_prob,
             p.confidence,
             market_prob,
@@ -84,8 +141,9 @@ def record_predictions(
     ]
     conn.executemany(
         "INSERT INTO predictions "
-        "(created_at, ticker, event_ticker, title, llm, predicted_prob, confidence, market_prob) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "(created_at, ticker, event_ticker, title, team, opponent, game_date, yes_bid, yes_ask, "
+        " llm, model, predicted_prob, confidence, market_prob) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rows,
     )
     conn.commit()

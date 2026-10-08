@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Markets - AI vs Kalshi{% endblock %}
+{% block content %}
+
+<section class="panel">
+    <h1>Tracked markets</h1>
+    <form class="date-filter" method="get" action="/">
+        <label for="date">Date</label>
+        <select name="date" id="date" onchange="this.form.submit()">
+            <option value="" {% if not selected_date %}selected{% endif %}>All dates</option>
+            {% for d in dates %}
+                <option value="{{ d }}" {% if d == selected_date %}selected{% endif %}>{{ d }}</option>
+            {% endfor %}
+        </select>
+    </form>
+
+    {% if not games %}
+        <p class="empty">No markets tracked {% if selected_date %}for {{ selected_date }}{% else %}yet{% endif %}.</p>
+    {% else %}
+    <table class="games">
+        <thead>
+            <tr>
+                <th>Date</th>
+                <th>Matchup</th>
+                <th>Kalshi odds</th>
+                <th>AIs</th>
+                <th>Result</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for g in games %}
+            <tr>
+                <td>{{ g.game_date or "?" }}</td>
+                <td><a href="/markets/{{ g.ticker }}">{{ g.team }} vs {{ g.opponent or "?" }}</a></td>
+                <td>{{ (g.market_prob * 100) | round | int }}%</td>
+                <td>{{ g.ai_count }}</td>
+                <td>
+                    {% if g.outcome is none %}
+                        <span class="pill pending">pending</span>
+                    {% elif g.outcome == 1 %}
+                        <span class="pill won">{{ g.team }} won</span>
+                    {% else %}
+                        <span class="pill lost">{{ g.team }} lost</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+</section>
+
+<section class="panel">
+    <h2>AI accuracy so far</h2>
+    {% if not accuracy %}
+        <p class="empty">No settled games yet to score accuracy from.</p>
+    {% else %}
+    <table class="accuracy">
+        <thead>
+            <tr>
+                <th>AI</th>
+                <th>Settled games</th>
+                <th>Brier score</th>
+                <th>Market's own Brier</th>
+                <th>Weight</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for a in accuracy %}
+            <tr>
+                <td>{{ a.llm }}</td>
+                <td>{{ a.settled_n }}</td>
+                <td>{{ "%.4f" | format(a.brier) }}</td>
+                <td>{{ "%.4f" | format(a.market_brier) }}</td>
+                <td>{{ "%.2f" | format(a.weight) }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <p class="note">Lower Brier is better; 0.25 is a coin flip. Weight is how much
+        this AI's opinion currently counts for in the EV calculation -- it only
+        reflects Brier score once an AI has 20+ settled games (see Tracker.py).</p>
+    {% endif %}
+</section>
+
+{% endblock %}

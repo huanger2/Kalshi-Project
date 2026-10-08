@@ -10,6 +10,7 @@ import openpyxl
 import pandas as pd
 
 import DailyLog
+import Tracker
 
 OCT3 = datetime.date(2026, 10, 3)
 OCT4 = datetime.date(2026, 10, 4)
@@ -48,6 +49,11 @@ class DailyLogTestCase(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.folder = os.path.join(tmp.name, "daily_logs")
         self.path = DailyLog.path_for(OCT4, self.folder)
+        # A real (but throwaway) file, not ":memory:", so a test can reopen
+        # it afterward via Tracker.connect() to check what got recorded --
+        # and, just as importantly, so run() never touches the real
+        # predictions.db as a side effect of running the test suite.
+        self.db_path = os.path.join(tmp.name, "predictions.db")
 
     def sheet(self, day):
         return DailyLog.load(DailyLog.path_for(day, self.folder))
@@ -58,7 +64,7 @@ class DailyLogTestCase(unittest.TestCase):
              mock.patch.object(DailyLog, "get_nba_results", return_value=list(results)) as get_results, \
              mock.patch.object(DailyLog, "CostExport") as cost_export, \
              contextlib.redirect_stdout(io.StringIO()):
-            self.counts = DailyLog.run(self.folder, today=today, llms=llms)
+            self.counts = DailyLog.run(self.folder, today=today, llms=llms, db_path=self.db_path)
         self.get_results = get_results
         self.cost_export = cost_export
         return self.sheet(today)
@@ -281,6 +287,57 @@ class OldLayoutTests(DailyLogTestCase):
         self.assertEqual(openpyxl.load_workbook(self.path)["Daily log"]["A2"].value, "Game date")
 
 
+class DatabaseIntegrationTests(DailyLogTestCase):
+    """
+    predictions.db is the table the webapp queries; DailyLog.run() must keep
+    it in sync with the spreadsheet as games are logged and settled.
+    """
+
+    def query_db(self, sql):
+        # Windows can't clean up the test's temp directory while a
+        # connection to a file in it is still open, so this must close
+        # before returning.
+        conn = Tracker.connect(self.db_path)
+        try:
+            return conn.execute(sql).fetchall()
+        finally:
+            conn.close()
+
+    def test_logging_a_game_records_one_row_per_ai_in_the_database(self):
+        self.run_day(OCT4, TODAY_MARKETS[:2])  # one game: Denver vs Utah
+
+        rows = self.query_db(
+            "SELECT llm, team, opponent, predicted_prob, confidence, market_prob, game_date, outcome "
+            "FROM predictions ORDER BY llm"
+        )
+        self.assertEqual(rows, [
+            ("Claude", "Denver", "Utah", 0.65, 0.60, 0.61, "2026-10-04", None),
+            ("Gemini", "Denver", "Utah", 0.55, 0.50, 0.61, "2026-10-04", None),
+            ("OpenAI", "Denver", "Utah", 0.70, 0.80, 0.61, "2026-10-04", None),
+        ])
+
+    def test_settling_a_game_updates_the_database_row_too(self):
+        self.run_day(OCT4, TODAY_MARKETS[:1])
+        results = [{"event_ticker": "KXNBAGAME-26OCT04UTADEN", "winner": "Utah", "loser": "Denver"}]
+        self.run_day(datetime.date(2026, 10, 5), results=results)
+
+        outcomes = {r[0] for r in self.query_db("SELECT outcome FROM predictions")}
+        self.assertEqual(outcomes, {0})  # the row is for Denver, who lost
+
+    def test_a_database_failure_while_logging_does_not_lose_the_spreadsheet_row(self):
+        with mock.patch.object(Tracker, "record_predictions", side_effect=RuntimeError("db locked")):
+            df = self.run_day(OCT4, TODAY_MARKETS[:1])
+        self.assertEqual(len(df), 1)
+        self.assertAlmostEqual(df.iloc[0]["claude_prob"], 0.65)
+
+    def test_a_database_failure_while_settling_does_not_lose_the_spreadsheet_result(self):
+        self.run_day(OCT4, TODAY_MARKETS[:1])
+        results = [{"event_ticker": "KXNBAGAME-26OCT04UTADEN", "winner": "Utah", "loser": "Denver"}]
+        with mock.patch.object(Tracker, "settle", side_effect=RuntimeError("db locked")):
+            self.run_day(datetime.date(2026, 10, 5), results=results)
+        self.assertEqual(self.sheet(OCT4).iloc[0]["winner"], "Utah")
+
+
 class ModelColumnTests(DailyLogTestCase):
     def test_todays_rows_records_the_configured_model_for_each_successful_ai(self):
         with mock.patch.object(DailyLog, "get_model", side_effect=lambda p: f"{p}-test-model"):
@@ -432,7 +489,7 @@ class CostExportIntegrationTests(DailyLogTestCase):
              mock.patch.object(DailyLog, "CostExport") as cost_export, \
              contextlib.redirect_stdout(io.StringIO()):
             cost_export.export_to_excel.side_effect = PermissionError("locked")
-            counts = DailyLog.run(self.folder, today=OCT4, llms=LLMS)
+            counts = DailyLog.run(self.folder, today=OCT4, llms=LLMS, db_path=self.db_path)
         # Games were still logged despite the cost-export step failing.
         self.assertEqual(counts, (0, 2))
 
