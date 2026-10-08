@@ -48,7 +48,7 @@ default in [`AISettings.py`](AISettings.py).
 Run once each morning:
 
 ```powershell
-python DailyLog.py
+py DailyLog.py
 ```
 
 Each run:
@@ -114,7 +114,7 @@ digging through spreadsheets. [`webapp/`](webapp/) is the first pass at
 that framework.
 
 ```powershell
-python -m uvicorn webapp.main:app --reload
+py -m uvicorn webapp.main:app --reload
 ```
 
 Then open <http://127.0.0.1:8000/>. It reads `predictions.db` directly (see
@@ -130,7 +130,7 @@ If you have `daily_logs/*.xlsx` files from before `DailyLog.py` started
 writing to `predictions.db` directly, backfill them once:
 
 ```powershell
-python MigrateDailyLogs.py
+py MigrateDailyLogs.py
 ```
 
 Safe to re-run -- it only inserts rows for a (ticker, AI) pair it hasn't
@@ -207,21 +207,21 @@ day's run catches it up.
 
 | Command | What it does |
 |---|---|
-| `python Collect.py usage` | Print each AI's logged token usage and estimated spend |
-| `python Collect.py costs [file.xlsx]` | Refresh the Excel export by hand (`api_costs.xlsx` by default) |
+| `py Collect.py usage` | Print each AI's logged token usage and estimated spend |
+| `py Collect.py costs [file.xlsx]` | Refresh the Excel export by hand (`api_costs.xlsx` by default) |
 
 ## Other tools
 
 | Command | What it does |
 |---|---|
-| `python Collect.py collect [N]` | Ask the AIs about up to N open games and store answers in `predictions.db` |
-| `python Collect.py settle` | Record results for finished games in `predictions.db` |
-| `python Collect.py weights` | Show each AI's accuracy (Brier score) and resulting weight |
-| `python Collect.py export [file.xlsx]` | Export `predictions.db` to Excel |
-| `python scripts.py probability` | Run the full expected-value analysis on one open game |
-| `python scripts.py kalshi` | List open NBA game markets with implied probabilities |
-| `python scripts.py ev` | EVCalculator worked example with made-up numbers |
-| `python scripts.py gemini` | Ask Gemini one sample prediction question |
+| `py Collect.py collect [N]` | Ask the AIs about up to N open games and store answers in `predictions.db` |
+| `py Collect.py settle` | Record results for finished games in `predictions.db` |
+| `py Collect.py weights` | Show each AI's accuracy (Brier score) and resulting weight |
+| `py Collect.py export [file.xlsx]` | Export `predictions.db` to Excel |
+| `py scripts.py probability` | Run the full expected-value analysis on one open game |
+| `py scripts.py kalshi` | List open NBA game markets with implied probabilities |
+| `py scripts.py ev` | EVCalculator worked example with made-up numbers |
+| `py scripts.py gemini` | Ask Gemini one sample prediction question |
 
 ## Project layout
 
@@ -245,7 +245,7 @@ day's run catches it up.
 ## Tests
 
 ```powershell
-python -m unittest discover tests
+py -m unittest discover tests
 ```
 
 All tests mock the network, so they need no keys and cost nothing. The AI tests
@@ -253,5 +253,5 @@ also include opt-in live checks against the real APIs; these make small paid
 calls:
 
 ```powershell
-$env:RUN_LIVE_AI_TESTS = "1"; python -m unittest tests.test_ai_apis -v
+$env:RUN_LIVE_AI_TESTS = "1"; py -m unittest tests.test_ai_apis -v
 ```
