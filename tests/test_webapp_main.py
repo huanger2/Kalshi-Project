@@ -56,6 +56,13 @@ class WebAppTestCase(unittest.TestCase):
         finally:
             conn.close()
 
+    def settle(self, ticker, yes_won):
+        conn = Tracker.connect(self.db_path)
+        try:
+            Tracker.settle(conn, ticker, yes_won)
+        finally:
+            conn.close()
+
 
 class MarketsPageTests(WebAppTestCase):
     def test_empty_state_is_a_200_not_an_error(self):
@@ -76,6 +83,18 @@ class MarketsPageTests(WebAppTestCase):
         r = self.client.get("/", params={"date": "2026-10-04"})
         self.assertIn("Denver", r.text)
         self.assertNotIn("Golden State", r.text)
+
+    def test_season_filter_excludes_other_segments(self):
+        self.record("G1", "Denver", 0.6, 0.7, game_date="2026-10-05")   # preseason
+        self.record("G2", "Golden State", 0.5, 0.5, game_date="2026-12-25")  # regular
+        r = self.client.get("/", params={"season": "regular"})
+        self.assertIn("Golden State", r.text)
+        self.assertNotIn("Denver", r.text)
+
+    def test_season_dropdown_lists_every_segment(self):
+        r = self.client.get("/")
+        for season in ("preseason", "regular", "postseason"):
+            self.assertIn(f'value="{season}"', r.text)
 
 
 class MarketDetailPageTests(WebAppTestCase):
@@ -104,6 +123,22 @@ class AiDetailPageTests(WebAppTestCase):
         self.assertEqual(r.status_code, 200)
         self.assertIn("No settled games yet", r.text)
 
+    def test_renders_when_every_settled_game_is_a_win(self):
+        # Regression: avg_edge_on_loss is independently None here (no losses
+        # settled yet) even though settled_n > 0 -- must not be a 500.
+        self.record("G1", "Denver", 0.5, 0.7)
+        self.settle("G1", True)
+        r = self.client.get("/ai/OpenAI")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("no losses settled yet", r.text)
+
+    def test_renders_when_every_settled_game_is_a_loss(self):
+        self.record("G1", "Denver", 0.5, 0.7)
+        self.settle("G1", False)
+        r = self.client.get("/ai/OpenAI")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("no wins settled yet", r.text)
+
     def test_is_case_insensitive(self):
         r = self.client.get("/ai/openai")
         self.assertEqual(r.status_code, 200)
@@ -111,6 +146,16 @@ class AiDetailPageTests(WebAppTestCase):
     def test_unknown_ai_is_a_404(self):
         r = self.client.get("/ai/NotARealAI")
         self.assertEqual(r.status_code, 404)
+
+    def test_season_filter_scopes_the_stats_and_history(self):
+        self.record("G1", "Denver", 0.40, 0.10, game_date="2026-10-05")   # preseason, settled, wrong
+        self.settle("G1", True)
+        self.record("G2", "Utah", 0.40, 0.70, game_date="2026-12-25")     # regular, settled, right
+        self.settle("G2", True)
+
+        r = self.client.get("/ai/OpenAI", params={"season": "regular"})
+        self.assertIn("Utah", r.text)
+        self.assertNotIn("Denver", r.text)
 
     def test_nav_tabs_link_to_every_ai(self):
         r = self.client.get("/ai/OpenAI")

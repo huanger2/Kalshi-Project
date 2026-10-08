@@ -16,8 +16,8 @@ class TrackerTestCase(unittest.TestCase):
     def setUp(self):
         self.conn = Tracker.connect(":memory:")
 
-    def add(self, ticker, llm, prob, market_prob=0.5):
-        Tracker.record_predictions(self.conn, market(ticker), market_prob, [pred(llm, prob)])
+    def add(self, ticker, llm, prob, market_prob=0.5, **kwargs):
+        Tracker.record_predictions(self.conn, market(ticker), market_prob, [pred(llm, prob)], **kwargs)
 
 
 class EnrichedFieldsTests(TrackerTestCase):
@@ -155,6 +155,22 @@ class BrierTests(TrackerTestCase):
         self.assertAlmostEqual(scores["Sharp"]["brier"], 0.0)
         self.assertAlmostEqual(scores["Dull"]["brier"], 1.0)
 
+    def test_season_type_scopes_to_one_segment_of_the_season(self):
+        # Preseason game: wildly wrong. Regular-season game: spot on.
+        self.add("G1", "A", 0.9, game_date="2026-10-05")  # preseason
+        self.add("G2", "A", 0.9, game_date="2026-12-25")  # regular
+        Tracker.settle(self.conn, "G1", False)  # (0.9-0)^2 = 0.81
+        Tracker.settle(self.conn, "G2", True)   # (0.9-1)^2 = 0.01
+
+        self.assertAlmostEqual(Tracker.brier_scores(self.conn, season_type="preseason")["A"]["brier"], 0.81)
+        self.assertAlmostEqual(Tracker.brier_scores(self.conn, season_type="regular")["A"]["brier"], 0.01)
+        self.assertAlmostEqual(Tracker.brier_scores(self.conn)["A"]["brier"], (0.81 + 0.01) / 2)
+
+    def test_season_type_with_no_matching_games_is_empty(self):
+        self.add("G1", "A", 0.9, game_date="2026-10-05")
+        Tracker.settle(self.conn, "G1", True)
+        self.assertEqual(Tracker.brier_scores(self.conn, season_type="postseason"), {})
+
 
 class WeightTests(TrackerTestCase):
     def test_brier_to_weight_mapping(self):
@@ -193,6 +209,19 @@ class WeightTests(TrackerTestCase):
     def test_unsettled_llm_appears_with_the_default(self):
         self.add("G1", "New", 0.7)
         self.assertEqual(Tracker.compute_weights(self.conn), {"New": 1.0})
+
+    def test_season_type_is_passed_through_to_brier_scores(self):
+        for i in range(20):
+            self.add(f"G{i}", "Sharp", 0.9, game_date="2026-10-05")  # preseason, 20 games
+            Tracker.settle(self.conn, f"G{i}", False)  # badly wrong every time
+        for i in range(20):
+            self.add(f"R{i}", "Sharp", 0.9, game_date="2026-12-25")  # regular, 20 games
+            Tracker.settle(self.conn, f"R{i}", True)  # spot on every time
+
+        preseason_weight = Tracker.compute_weights(self.conn, min_samples=20, season_type="preseason")["Sharp"]
+        regular_weight = Tracker.compute_weights(self.conn, min_samples=20, season_type="regular")["Sharp"]
+        self.assertAlmostEqual(preseason_weight, 0.0)
+        self.assertAlmostEqual(regular_weight, 1 - 0.01 / 0.25)  # (0.9-1)^2 = 0.01 Brier every time
 
     def test_weights_feed_straight_into_the_ev_calculator(self):
         from EVCalculator import EVCalculator

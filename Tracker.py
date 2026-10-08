@@ -73,11 +73,23 @@ def _now() -> str:
 
 
 def connect(db_path: str = DEFAULT_DB) -> sqlite3.Connection:
-    """Open (creating if needed) the predictions database."""
+    """
+    Open (creating if needed) the predictions database.
+
+    Registers season_type(game_date) as a SQL function (backed by
+    SeasonType.classify_iso) on every connection, so queries can filter or
+    group by preseason/regular/postseason without storing it as a column --
+    it's purely derived from game_date, so a query always reflects the
+    current nba_season.json, never a stale snapshot from whenever a row was
+    inserted.
+    """
+    import SeasonType
+
     conn = sqlite3.connect(db_path)
     conn.executescript(SCHEMA)
     _migrate(conn)
     conn.commit()
+    conn.create_function("season_type", 1, SeasonType.classify_iso)
     return conn
 
 
@@ -196,18 +208,30 @@ def settle_from_kalshi(
     return settled
 
 
-def brier_scores(conn: sqlite3.Connection) -> dict[str, dict]:
+def brier_scores(conn: sqlite3.Connection, season_type: Optional[str] = None) -> dict[str, dict]:
     """
     Per-LLM accuracy over settled predictions.
+
+    Pass season_type ("preseason", "regular", or "postseason") to scope
+    this to one segment of the season instead of everything settled --
+    preseason games are inherently noisier (limited rotations, no real
+    stakes) regardless of an AI's actual skill, so mixing them in with
+    regular-season/playoff games muddies the signal either way.
 
     Returns {llm: {"n": count, "brier": mean squared error,
                    "market_brier": the market's own score on the same games}}.
     """
+    where = "WHERE outcome IS NOT NULL"
+    params: list = []
+    if season_type:
+        where += " AND season_type(game_date) = ?"
+        params.append(season_type)
     rows = conn.execute(
-        "SELECT llm, COUNT(*), "
-        "       AVG((predicted_prob - outcome) * (predicted_prob - outcome)), "
-        "       AVG((market_prob - outcome) * (market_prob - outcome)) "
-        "FROM predictions WHERE outcome IS NOT NULL GROUP BY llm"
+        f"SELECT llm, COUNT(*), "
+        f"       AVG((predicted_prob - outcome) * (predicted_prob - outcome)), "
+        f"       AVG((market_prob - outcome) * (market_prob - outcome)) "
+        f"FROM predictions {where} GROUP BY llm",
+        params,
     ).fetchall()
     return {llm: {"n": n, "brier": brier, "market_brier": mkt} for llm, n, brier, mkt in rows}
 
@@ -221,19 +245,23 @@ def compute_weights(
     conn: sqlite3.Connection,
     min_samples: int = 20,
     default_weight: float = 1.0,
+    season_type: Optional[str] = None,
 ) -> dict[str, float]:
     """
     Accuracy weight in [0, 1] for each LLM seen so far.
 
     An LLM with fewer than ``min_samples`` settled predictions keeps
     ``default_weight`` because a handful of games says little about skill.
+
+    season_type scopes the underlying Brier score the same way
+    brier_scores() does -- see its docstring.
     """
     weights = {}
     seen = conn.execute("SELECT DISTINCT llm FROM predictions").fetchall()
     for (llm,) in seen:
         weights[llm] = default_weight
 
-    for llm, stats in brier_scores(conn).items():
+    for llm, stats in brier_scores(conn, season_type=season_type).items():
         if stats["n"] >= min_samples:
             weights[llm] = brier_to_weight(stats["brier"])
     return weights

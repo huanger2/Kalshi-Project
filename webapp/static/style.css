@@ -10,6 +10,8 @@
     --lost: #b42318;
     --lost-bg: #fbeae9;
     --pending-bg: #f1f2f4;
+    --postseason: #9a6700;
+    --postseason-bg: #fdf3dc;
 }
 
 * { box-sizing: border-box; }
@@ -92,8 +94,10 @@ h2 { font-size: 1.1rem; margin: 0 0 0.75rem; }
     font-size: 0.9rem;
 }
 
-.date-filter { margin-bottom: 1rem; }
-.date-filter select {
+.filters { margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.filters label { font-size: 0.85rem; color: var(--muted); }
+.filters label:not(:first-child) { margin-left: 0.5rem; }
+.filters select {
     padding: 0.35rem 0.5rem;
     border: 1px solid var(--border);
     border-radius: 6px;
@@ -118,6 +122,9 @@ table a:hover { text-decoration: underline; }
 .pill.pending { background: var(--pending-bg); color: var(--muted); }
 .pill.won { background: var(--won-bg); color: var(--won); }
 .pill.lost { background: var(--lost-bg); color: var(--lost); }
+.pill.season-preseason { background: var(--pending-bg); color: var(--muted); }
+.pill.season-regular { background: #e8f0fe; color: var(--accent); }
+.pill.season-postseason { background: var(--postseason-bg); color: var(--postseason); }
 
 .facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.3rem 1rem; margin: 0; }
 .facts dt { color: var(--muted); font-size: 0.85rem; }

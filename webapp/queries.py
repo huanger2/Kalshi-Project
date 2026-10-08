@@ -11,23 +11,40 @@ depends on.
 import sqlite3
 from typing import Optional
 
+# Fixed, known domain -- not queried from the database the way list_game_dates()
+# queries actual dates, since every value here is always a valid filter choice
+# regardless of what's been logged so far.
+SEASON_TYPES = ["preseason", "regular", "postseason"]
 
-def list_games(conn: sqlite3.Connection, game_date: Optional[str] = None) -> list[dict]:
+
+def list_games(
+    conn: sqlite3.Connection, game_date: Optional[str] = None, season_type: Optional[str] = None
+) -> list[dict]:
     """
     One row per tracked game, newest first. Pass game_date (ISO, e.g.
-    "2026-10-05") to limit to one day.
+    "2026-10-05") to limit to one day, and/or season_type ("preseason",
+    "regular", "postseason") to limit to one segment of the season.
 
     DailyLog.py logs only one team's market per game, so grouping by ticker
     is equivalent to grouping by game here.
     """
+    conditions = []
+    params: list = []
+    if game_date:
+        conditions.append("game_date = ?")
+        params.append(game_date)
+    if season_type:
+        conditions.append("season_type(game_date) = ?")
+        params.append(season_type)
+    where = f"WHERE {' AND '.join(conditions)} " if conditions else ""
+
     sql = (
         "SELECT ticker, event_ticker, game_date, team, opponent, yes_bid, yes_ask, "
-        "       market_prob, outcome, COUNT(*) "
+        "       market_prob, outcome, COUNT(*), season_type(game_date) "
         "FROM predictions "
-        + ("WHERE game_date = ? " if game_date else "")
+        + where
         + "GROUP BY ticker ORDER BY game_date DESC, ticker"
     )
-    params = (game_date,) if game_date else ()
     rows = conn.execute(sql, params).fetchall()
     return [
         {
@@ -41,9 +58,10 @@ def list_games(conn: sqlite3.Connection, game_date: Optional[str] = None) -> lis
             "market_prob": market_prob,
             "outcome": outcome,
             "ai_count": ai_count,
+            "season_type": season,
         }
         for (ticker, event_ticker, game_date, team, opponent, yes_bid, yes_ask,
-             market_prob, outcome, ai_count) in rows
+             market_prob, outcome, ai_count, season) in rows
     ]
 
 
@@ -64,14 +82,14 @@ def get_game(conn: sqlite3.Connection, ticker: str) -> Optional[dict]:
     """
     row = conn.execute(
         "SELECT ticker, event_ticker, game_date, team, opponent, yes_bid, yes_ask, "
-        "       market_prob, outcome, settled_at "
+        "       market_prob, outcome, settled_at, season_type(game_date) "
         "FROM predictions WHERE ticker = ? LIMIT 1",
         (ticker,),
     ).fetchone()
     if row is None:
         return None
     (ticker, event_ticker, game_date, team, opponent, yes_bid, yes_ask,
-     market_prob, outcome, settled_at) = row
+     market_prob, outcome, settled_at, season) = row
 
     predictions = conn.execute(
         "SELECT llm, model, predicted_prob, confidence FROM predictions WHERE ticker = ? ORDER BY llm",
@@ -89,6 +107,7 @@ def get_game(conn: sqlite3.Connection, ticker: str) -> Optional[dict]:
         "market_prob": market_prob,
         "outcome": outcome,
         "settled_at": settled_at,
+        "season_type": season,
         "predictions": [
             {
                 "llm": llm,
@@ -104,9 +123,12 @@ def get_game(conn: sqlite3.Connection, ticker: str) -> Optional[dict]:
     }
 
 
-def ai_stats(conn: sqlite3.Connection, llm: str) -> dict:
+def ai_stats(conn: sqlite3.Connection, llm: str, season_type: Optional[str] = None) -> dict:
     """
-    One AI's calibration/accuracy picture, over its settled games:
+    One AI's calibration/accuracy picture, over its settled games. Pass
+    season_type ("preseason", "regular", "postseason") to scope this to
+    one segment of the season -- see Tracker.brier_scores() for why that
+    matters.
 
     - avg_edge_on_win / avg_edge_on_loss: the average (predicted - market)
       edge, split by what actually happened. A skilled AI's edge should
@@ -124,10 +146,13 @@ def ai_stats(conn: sqlite3.Connection, llm: str) -> dict:
     """
     import Tracker
 
+    season_filter = " AND season_type(game_date) = ?" if season_type else ""
+    season_params = [season_type] if season_type else []
+
     total_n, settled_n = conn.execute(
         "SELECT COUNT(*), COALESCE(SUM(CASE WHEN outcome IS NOT NULL THEN 1 ELSE 0 END), 0) "
-        "FROM predictions WHERE llm = ?",
-        (llm,),
+        "FROM predictions WHERE llm = ?" + season_filter,
+        [llm, *season_params],
     ).fetchone()
 
     (avg_edge_on_win, avg_edge_on_loss, direction_accuracy,
@@ -140,12 +165,12 @@ def ai_stats(conn: sqlite3.Connection, llm: str) -> dict:
         "  AVG(CASE WHEN (market_prob > 0.5 AND outcome = 1) OR (market_prob < 0.5 AND outcome = 0) "
         "       THEN 1.0 ELSE 0.0 END), "
         "  AVG(confidence) "
-        "FROM predictions WHERE llm = ? AND outcome IS NOT NULL",
-        (llm,),
+        "FROM predictions WHERE llm = ? AND outcome IS NOT NULL" + season_filter,
+        [llm, *season_params],
     ).fetchone()
 
-    scores = Tracker.brier_scores(conn).get(llm)
-    weight = Tracker.compute_weights(conn).get(llm, 1.0)
+    scores = Tracker.brier_scores(conn, season_type=season_type).get(llm)
+    weight = Tracker.compute_weights(conn, season_type=season_type).get(llm, 1.0)
 
     return {
         "llm": llm,
@@ -163,12 +188,19 @@ def ai_stats(conn: sqlite3.Connection, llm: str) -> dict:
     }
 
 
-def ai_predictions(conn: sqlite3.Connection, llm: str) -> list[dict]:
+def ai_predictions(conn: sqlite3.Connection, llm: str, season_type: Optional[str] = None) -> list[dict]:
     """Every prediction this AI has made, newest game first, with its edge vs the market."""
+    where = "WHERE llm = ?"
+    params = [llm]
+    if season_type:
+        where += " AND season_type(game_date) = ?"
+        params.append(season_type)
+
     rows = conn.execute(
-        "SELECT ticker, game_date, team, opponent, model, predicted_prob, confidence, market_prob, outcome "
-        "FROM predictions WHERE llm = ? ORDER BY game_date DESC, ticker",
-        (llm,),
+        "SELECT ticker, game_date, team, opponent, model, predicted_prob, confidence, market_prob, "
+        "       outcome, season_type(game_date) "
+        f"FROM predictions {where} ORDER BY game_date DESC, ticker",
+        params,
     ).fetchall()
     return [
         {
@@ -181,19 +213,20 @@ def ai_predictions(conn: sqlite3.Connection, llm: str) -> list[dict]:
             "confidence": confidence,
             "market_prob": market_prob,
             "outcome": outcome,
+            "season_type": season,
             "edge": predicted_prob - market_prob,
         }
         for (ticker, game_date, team, opponent, model, predicted_prob, confidence,
-             market_prob, outcome) in rows
+             market_prob, outcome, season) in rows
     ]
 
 
-def accuracy_summary(conn: sqlite3.Connection) -> list[dict]:
+def accuracy_summary(conn: sqlite3.Connection, season_type: Optional[str] = None) -> list[dict]:
     """Each AI's Brier score / weight so far, for display alongside the market's own."""
     import Tracker
 
-    scores = Tracker.brier_scores(conn)
-    weights = Tracker.compute_weights(conn)
+    scores = Tracker.brier_scores(conn, season_type=season_type)
+    weights = Tracker.compute_weights(conn, season_type=season_type)
     return [
         {
             "llm": llm,

@@ -46,14 +46,20 @@ def get_db() -> Iterator[sqlite3.Connection]:
 
 
 @app.get("/", response_class=HTMLResponse)
-def markets_page(request: Request, date: Optional[str] = None, conn: sqlite3.Connection = Depends(get_db)):
-    games = queries.list_games(conn, game_date=date)
+def markets_page(
+    request: Request,
+    date: Optional[str] = None,
+    season: Optional[str] = None,
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    games = queries.list_games(conn, game_date=date, season_type=season)
     dates = queries.list_game_dates(conn)
-    accuracy = queries.accuracy_summary(conn)
+    accuracy = queries.accuracy_summary(conn, season_type=season)
     return templates.TemplateResponse(
         request, "markets.html",
         {
             "games": games, "dates": dates, "selected_date": date, "accuracy": accuracy,
+            "season_types": queries.SEASON_TYPES, "selected_season": season,
             "ai_names": DEFAULT_LLM_NAMES, "active_tab": "markets",
         },
     )
@@ -71,17 +77,23 @@ def market_detail_page(request: Request, ticker: str, conn: sqlite3.Connection =
 
 
 @app.get("/ai/{name}", response_class=HTMLResponse)
-def ai_detail_page(request: Request, name: str, conn: sqlite3.Connection = Depends(get_db)):
+def ai_detail_page(
+    request: Request,
+    name: str,
+    season: Optional[str] = None,
+    conn: sqlite3.Connection = Depends(get_db),
+):
     # Case-insensitive so /ai/openai works the same as the canonical /ai/OpenAI.
     matched = next((n for n in DEFAULT_LLM_NAMES if n.lower() == name.lower()), None)
     if matched is None:
         raise HTTPException(status_code=404, detail=f"Unknown AI {name!r}")
-    stats = queries.ai_stats(conn, matched)
-    predictions = queries.ai_predictions(conn, matched)
+    stats = queries.ai_stats(conn, matched, season_type=season)
+    predictions = queries.ai_predictions(conn, matched, season_type=season)
     return templates.TemplateResponse(
         request, "ai_detail.html",
         {
             "stats": stats, "predictions": predictions,
+            "season_types": queries.SEASON_TYPES, "selected_season": season,
             "ai_names": DEFAULT_LLM_NAMES, "active_tab": matched,
         },
     )
@@ -90,8 +102,10 @@ def ai_detail_page(request: Request, name: str, conn: sqlite3.Connection = Depen
 # --- JSON, for whatever consumes this next (a JS frontend, a mobile client) ---
 
 @app.get("/api/markets")
-def api_markets(date: Optional[str] = None, conn: sqlite3.Connection = Depends(get_db)) -> list[dict]:
-    return queries.list_games(conn, game_date=date)
+def api_markets(
+    date: Optional[str] = None, season: Optional[str] = None, conn: sqlite3.Connection = Depends(get_db)
+) -> list[dict]:
+    return queries.list_games(conn, game_date=date, season_type=season)
 
 
 @app.get("/api/markets/{ticker}")
@@ -103,13 +117,18 @@ def api_market_detail(ticker: str, conn: sqlite3.Connection = Depends(get_db)) -
 
 
 @app.get("/api/accuracy")
-def api_accuracy(conn: sqlite3.Connection = Depends(get_db)) -> list[dict]:
-    return queries.accuracy_summary(conn)
+def api_accuracy(season: Optional[str] = None, conn: sqlite3.Connection = Depends(get_db)) -> list[dict]:
+    return queries.accuracy_summary(conn, season_type=season)
 
 
 @app.get("/api/ai/{name}")
-def api_ai_detail(name: str, conn: sqlite3.Connection = Depends(get_db)) -> dict:
+def api_ai_detail(
+    name: str, season: Optional[str] = None, conn: sqlite3.Connection = Depends(get_db)
+) -> dict:
     matched = next((n for n in DEFAULT_LLM_NAMES if n.lower() == name.lower()), None)
     if matched is None:
         raise HTTPException(status_code=404, detail=f"Unknown AI {name!r}")
-    return {"stats": queries.ai_stats(conn, matched), "predictions": queries.ai_predictions(conn, matched)}
+    return {
+        "stats": queries.ai_stats(conn, matched, season_type=season),
+        "predictions": queries.ai_predictions(conn, matched, season_type=season),
+    }

@@ -17,6 +17,8 @@
         </dd>
         <dt>Kalshi implied win %</dt>
         <dd>{{ (game.market_prob * 100) | round | int }}%</dd>
+        <dt>Season</dt>
+        <dd><span class="pill season-{{ game.season_type }}">{{ game.season_type or "?" }}</span></dd>
         <dt>Result</dt>
         <dd>
             {% if game.outcome is none %}

@@ -1,0 +1,4 @@
+{
+    "_comment": "NBA season boundaries, keyed by season (e.g. '2026-27' for the season starting October 2026). SeasonType.py falls back to a generic calendar heuristic (regular season starts ~Oct 21, postseason ~Apr 14) for any season/boundary left null here -- fill in the league's actual published dates once announced for exact classification.",
+    "2026-27": {"regular_season_start": null, "postseason_start": null}
+}

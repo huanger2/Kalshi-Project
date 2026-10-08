@@ -120,11 +120,50 @@ py -m uvicorn webapp.main:app --reload
 Then open <http://127.0.0.1:8000/>. It reads `predictions.db` directly (see
 [`Tracker.py`](Tracker.py)) -- the one table `DailyLog.py` and `Collect.py`
 both write into as they run, so the page is always current with no refresh
-step of its own. It lists tracked games (filterable by date), a detail page
-per game showing every AI's prediction next to Kalshi's price and the
-"edge" between them, and a running accuracy/weight summary per AI. A couple
-of JSON endpoints (`/api/markets`, `/api/markets/{ticker}`, `/api/accuracy`)
-sit alongside the HTML pages for whatever consumes this next.
+step of its own. It lists tracked games (filterable by date and by
+preseason/regular season/postseason), a detail page per game showing every
+AI's prediction next to Kalshi's price and the "edge" between them, and a
+**tab per AI** (`/ai/{name}`) with its calibration stats and full
+prediction history:
+
+- **Average edge when the team won / lost.** A skilled, well-calibrated AI's
+  edge (predicted win % minus Kalshi's) should be positive on games its
+  pick went on to win and negative on games it went on to lose -- edge that
+  looks the same either way isn't actually predictive, whatever the raw
+  Brier score says.
+- **Called the winner %**, i.e. how often its >50%/<50% pick matched the
+  outcome regardless of margin, next to the market's own for comparison.
+- Brier score vs. the market's own, current EV weight, average confidence.
+
+A couple of JSON endpoints (`/api/markets`, `/api/markets/{ticker}`,
+`/api/accuracy`, `/api/ai/{name}`) sit alongside the HTML pages for
+whatever consumes this next.
+
+### Preseason, regular season, postseason
+
+Kalshi doesn't label a `KXNBAGAME` market with which part of the season
+it's in (checked directly against the live API: no such field exists) --
+preseason games are inherently noisier (limited rotations, no real stakes)
+regardless of an AI's actual skill, so this matters for reading the
+accuracy numbers honestly. [`SeasonType.py`](SeasonType.py) classifies a
+game date instead, purely from the date -- nothing is stored, so a query
+always reflects the current config, never a stale snapshot from whenever
+a row was inserted.
+
+It defaults to a generic calendar heuristic (regular season starts ~Oct 21,
+postseason ~Apr 14) that's approximately right for most seasons. Fill in
+[`nba_season.json`](nba_season.json) with a season's actual published
+start dates for exact boundaries:
+
+```json
+{
+    "2026-27": {"regular_season_start": "2026-10-24", "postseason_start": "2027-04-18"}
+}
+```
+
+`Tracker.brier_scores()` / `compute_weights()` also take an optional
+`season_type` to scope the EV-calculation weight itself to one segment --
+not just the webapp's display.
 
 If you have `daily_logs/*.xlsx` files from before `DailyLog.py` started
 writing to `predictions.db` directly, backfill them once:
@@ -236,6 +275,7 @@ day's run catches it up.
 | `EVCalculator.py` | Confidence-weighted expected-value score vs. the market price |
 | `Tracker.py`, `Export.py`, `Collect.py` | SQLite prediction tracking (the webapp's data source too), accuracy weights, Excel export |
 | `webapp/` | FastAPI app for browsing tracked markets and AI-vs-Kalshi comparisons |
+| `SeasonType.py`, `nba_season.json` | Classifies a game date as preseason/regular/postseason |
 | `MigrateDailyLogs.py` | One-time backfill of `daily_logs/*.xlsx` into `predictions.db` |
 | `Notifier.py` | Emails an alert when an AI API call looks like a billing/quota failure |
 | `CostTracker.py`, `CostExport.py`, `model_pricing.json` | Token-based API spend estimate and Excel export |
