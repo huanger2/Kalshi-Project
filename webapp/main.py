@@ -27,6 +27,22 @@ app = FastAPI(title="AI vs Kalshi")
 app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
 templates = Jinja2Templates(directory=str(HERE / "templates"))
 
+_STYLE_CSS = HERE / "static" / "style.css"
+
+
+def _static_version() -> int:
+    """
+    style.css's own mtime, used as a cache-busting query string (?v=...) on
+    its <link> tag -- browsers cache static assets aggressively and we have
+    no other signal to tell one to refetch after an edit, so tie the URL
+    itself to whether the file actually changed. Read fresh every render
+    (not cached at startup) so it's correct without restarting the server.
+    """
+    return int(_STYLE_CSS.stat().st_mtime)
+
+
+templates.env.globals["static_version"] = _static_version
+
 
 def get_db() -> Iterator[sqlite3.Connection]:
     """
