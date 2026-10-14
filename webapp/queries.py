@@ -122,10 +122,24 @@ def list_games(
     ]
 
 
-def list_game_dates(conn: sqlite3.Connection) -> list[str]:
-    """Every distinct game date tracked so far, newest first."""
+def list_game_dates(
+    conn: sqlite3.Connection,
+    segment: Optional[str] = None,
+    season_year: Optional[str] = None,
+) -> list[str]:
+    """
+    Every distinct game date tracked so far, newest first. Pass segment
+    and/or season_year to limit the dropdown to dates that actually fall
+    in the currently selected part of the season/season -- otherwise
+    picking one of the other two filters could leave dates selectable
+    that have no games to show.
+    """
+    season_sql, season_params = _season_filter(segment, season_year)
     rows = conn.execute(
-        "SELECT DISTINCT game_date FROM predictions WHERE game_date IS NOT NULL ORDER BY game_date DESC"
+        "SELECT DISTINCT game_date FROM predictions WHERE game_date IS NOT NULL"
+        + season_sql
+        + " ORDER BY game_date DESC",
+        season_params,
     ).fetchall()
     return [r[0] for r in rows]
 

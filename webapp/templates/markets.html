@@ -5,13 +5,6 @@
 <section class="panel">
     <h1>Tracked markets</h1>
     <form class="filters" method="get" action="/">
-        <label for="date">Date</label>
-        <select name="date" id="date" onchange="this.form.submit()">
-            <option value="" {% if not selected_date %}selected{% endif %}>All dates</option>
-            {% for d in dates %}
-                <option value="{{ d }}" {% if d == selected_date %}selected{% endif %}>{{ d }}</option>
-            {% endfor %}
-        </select>
         <label for="season">Season</label>
         <select name="season" id="season" onchange="this.form.submit()">
             <option value="" {% if not selected_season %}selected{% endif %}>All seasons</option>
@@ -24,6 +17,13 @@
             <option value="" {% if not selected_segment %}selected{% endif %}>All</option>
             {% for s in segments %}
                 <option value="{{ s }}" {% if s == selected_segment %}selected{% endif %}>{{ s | capitalize }}</option>
+            {% endfor %}
+        </select>
+        <label for="date">Date</label>
+        <select name="date" id="date" onchange="this.form.submit()">
+            <option value="" {% if not selected_date %}selected{% endif %}>All dates</option>
+            {% for d in dates %}
+                <option value="{{ d }}" {% if d == selected_date %}selected{% endif %}>{{ d }}</option>
             {% endfor %}
         </select>
     </form>

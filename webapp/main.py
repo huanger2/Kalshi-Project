@@ -70,7 +70,7 @@ def markets_page(
     conn: sqlite3.Connection = Depends(get_db),
 ):
     games = queries.list_games(conn, game_date=date, segment=segment, season_year=season)
-    dates = queries.list_game_dates(conn)
+    dates = queries.list_game_dates(conn, segment=segment, season_year=season)
     seasons = queries.list_season_years(conn)
     accuracy = queries.accuracy_summary(conn, segment=segment, season_year=season)
     return templates.TemplateResponse(

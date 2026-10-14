@@ -145,6 +145,16 @@ class ListGameDatesTests(QueriesTestCase):
         self.record("G3", "Golden State", 0.5, [pred("OpenAI", 0.5)], game_date="2026-10-06")
         self.assertEqual(queries.list_game_dates(self.conn), ["2026-10-06", "2026-10-04"])
 
+    def test_filters_by_segment(self):
+        self.record("G1", "Denver", 0.5, [pred("OpenAI", 0.7)], game_date="2026-10-05")   # preseason
+        self.record("G2", "Utah", 0.5, [pred("OpenAI", 0.5)], game_date="2026-12-25")     # regular
+        self.assertEqual(queries.list_game_dates(self.conn, segment="regular"), ["2026-12-25"])
+
+    def test_filters_by_season_year_independently_of_segment(self):
+        self.record("G1", "Denver", 0.5, [pred("OpenAI", 0.7)], game_date="2026-10-05")   # 2026-27
+        self.record("G2", "Utah", 0.5, [pred("OpenAI", 0.5)], game_date="2027-10-05")     # 2027-28
+        self.assertEqual(queries.list_game_dates(self.conn, season_year="2027-28"), ["2027-10-05"])
+
 
 class ListSeasonYearsTests(QueriesTestCase):
     def test_distinct_seasons_newest_first(self):
