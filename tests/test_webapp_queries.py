@@ -118,6 +118,25 @@ class ListGamesTests(QueriesTestCase):
         Tracker.settle(self.conn, "G1", True)
         self.assertIsNone(queries.list_games(self.conn)[0]["market_correct"])
 
+    def test_ai_beat_market_is_none_before_settlement(self):
+        self.record("G1", "Denver", 0.5, [pred("OpenAI", 0.9)])
+        self.assertIsNone(queries.list_games(self.conn)[0]["ai_beat_market"])
+
+    def test_ai_beat_market_true_when_ai_was_closer_to_the_outcome(self):
+        self.record("G1", "Denver", 0.5, [pred("OpenAI", 0.9)])  # AI error 0.1, market error 0.5
+        Tracker.settle(self.conn, "G1", True)
+        self.assertTrue(queries.list_games(self.conn)[0]["ai_beat_market"])
+
+    def test_ai_beat_market_false_when_market_was_closer_to_the_outcome(self):
+        self.record("G1", "Denver", 0.9, [pred("OpenAI", 0.5)])  # market error 0.1, AI error 0.5
+        Tracker.settle(self.conn, "G1", True)
+        self.assertFalse(queries.list_games(self.conn)[0]["ai_beat_market"])
+
+    def test_ai_beat_market_is_none_on_a_tie(self):
+        self.record("G1", "Denver", 0.6, [pred("OpenAI", 0.6)])
+        Tracker.settle(self.conn, "G1", True)
+        self.assertIsNone(queries.list_games(self.conn)[0]["ai_beat_market"])
+
 
 class ListGameDatesTests(QueriesTestCase):
     def test_distinct_dates_newest_first(self):

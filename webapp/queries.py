@@ -42,6 +42,24 @@ def _call_correct(prob: Optional[float], outcome: Optional[int]) -> Optional[boo
     return (prob > 0.5) == (outcome == 1)
 
 
+def _ai_beat_market(
+    ai_prob: Optional[float], market_prob: Optional[float], outcome: Optional[int]
+) -> Optional[bool]:
+    """
+    Whose odds ended up closer to what actually happened: the AIs' average,
+    or Kalshi's own price? True/False if one of them was strictly closer to
+    the outcome; None if either side is missing, the game hasn't settled,
+    or they were equally close (nothing to call either way).
+    """
+    if ai_prob is None or market_prob is None or outcome is None:
+        return None
+    ai_error = abs(ai_prob - outcome)
+    market_error = abs(market_prob - outcome)
+    if ai_error == market_error:
+        return None
+    return ai_error < market_error
+
+
 def list_games(
     conn: sqlite3.Connection,
     game_date: Optional[str] = None,
@@ -97,6 +115,7 @@ def list_games(
             "season_year": year,
             "market_correct": _call_correct(market_prob, outcome),
             "ai_correct": _call_correct(ai_prob, outcome),
+            "ai_beat_market": _ai_beat_market(ai_prob, market_prob, outcome),
         }
         for (ticker, event_ticker, game_date, team, opponent, yes_bid, yes_ask,
              market_prob, outcome, ai_count, ai_prob, seg, year) in rows

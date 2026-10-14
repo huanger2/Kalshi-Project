@@ -59,16 +59,24 @@
                 <td>
                     {% if g.outcome is none %}
                         <span class="pill pending">pending</span>
-                    {% elif g.outcome == 1 %}
-                        <span class="pill neutral">{{ g.team }} won</span>
                     {% else %}
-                        <span class="pill neutral">{{ g.team }} lost</span>
+                        {% set result_text = (g.team ~ " won") if g.outcome == 1 else (g.team ~ " lost") %}
+                        {% if g.ai_beat_market == true %}
+                            <span class="pill ai-better">{{ result_text }}</span>
+                        {% elif g.ai_beat_market == false %}
+                            <span class="pill market-better">{{ result_text }}</span>
+                        {% else %}
+                            <span class="pill neutral">{{ result_text }}</span>
+                        {% endif %}
                     {% endif %}
                 </td>
             </tr>
             {% endfor %}
         </tbody>
     </table>
+    <p class="note">Result is colored by whose odds ended up closer to what actually happened:
+        green if the AIs' average was closer, red if Kalshi's price was closer, plain if they
+        were equally close.</p>
     {% endif %}
 </section>
 

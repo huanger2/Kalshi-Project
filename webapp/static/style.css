@@ -123,6 +123,8 @@ table a:hover { text-decoration: underline; }
 .pill.neutral { background: var(--pending-bg); color: var(--text); }
 .pill.won { background: var(--won-bg); color: var(--won); }
 .pill.lost { background: var(--lost-bg); color: var(--lost); }
+.pill.ai-better { background: var(--won-bg); color: var(--won); }
+.pill.market-better { background: var(--lost-bg); color: var(--lost); }
 .pill.segment-preseason { background: var(--pending-bg); color: var(--muted); }
 .pill.segment-regular { background: #e8f0fe; color: var(--accent); }
 .pill.segment-postseason { background: var(--postseason-bg); color: var(--postseason); }
