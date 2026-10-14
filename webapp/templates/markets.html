@@ -36,9 +36,10 @@
             <tr>
                 <th>Date</th>
                 <th>Matchup</th>
-                <th>Kalshi odds</th>
                 <th>Season</th>
                 <th>AIs</th>
+                <th>Kalshi odds</th>
+                <th>AI odds</th>
                 <th>Result</th>
             </tr>
         </thead>
@@ -47,16 +48,21 @@
             <tr>
                 <td>{{ g.game_date or "?" }}</td>
                 <td><a href="/markets/{{ g.ticker }}">{{ g.team }} vs {{ g.opponent or "?" }}</a></td>
-                <td>{{ (g.market_prob * 100) | round | int }}%</td>
                 <td>{{ g.season_year or "?" }} <span class="pill segment-{{ g.segment }}">{{ g.segment or "?" }}</span></td>
                 <td>{{ g.ai_count }}</td>
+                <td class="{% if g.market_correct == true %}odds-correct{% elif g.market_correct == false %}odds-wrong{% endif %}">
+                    {{ (g.market_prob * 100) | round | int }}%
+                </td>
+                <td class="{% if g.ai_correct == true %}odds-correct{% elif g.ai_correct == false %}odds-wrong{% endif %}">
+                    {% if g.ai_prob is none %}n/a{% else %}{{ (g.ai_prob * 100) | round | int }}%{% endif %}
+                </td>
                 <td>
                     {% if g.outcome is none %}
                         <span class="pill pending">pending</span>
                     {% elif g.outcome == 1 %}
-                        <span class="pill won">{{ g.team }} won</span>
+                        <span class="pill neutral">{{ g.team }} won</span>
                     {% else %}
-                        <span class="pill lost">{{ g.team }} lost</span>
+                        <span class="pill neutral">{{ g.team }} lost</span>
                     {% endif %}
                 </td>
             </tr>

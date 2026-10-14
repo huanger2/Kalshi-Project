@@ -99,6 +99,25 @@ class ListGamesTests(QueriesTestCase):
         games = queries.list_games(self.conn, season_year="2026-27", segment="preseason")
         self.assertEqual([g["ticker"] for g in games], ["G1"])
 
+    def test_includes_the_average_ai_probability(self):
+        self.record("G1", "Denver", 0.5, [pred("OpenAI", 0.7), pred("Claude", 0.5)])
+        self.assertAlmostEqual(queries.list_games(self.conn)[0]["ai_prob"], 0.6)
+
+    def test_market_correct_is_none_before_settlement(self):
+        self.record("G1", "Denver", 0.6, [pred("OpenAI", 0.7)])
+        self.assertIsNone(queries.list_games(self.conn)[0]["market_correct"])
+
+    def test_market_correct_reflects_whether_the_market_called_the_winner(self):
+        self.record("G1", "Denver", 0.6, [pred("OpenAI", 0.3)])
+        Tracker.settle(self.conn, "G1", True)
+        self.assertTrue(queries.list_games(self.conn)[0]["market_correct"])
+        self.assertFalse(queries.list_games(self.conn)[0]["ai_correct"])
+
+    def test_an_exact_fifty_percent_market_call_is_not_correct_or_wrong(self):
+        self.record("G1", "Denver", 0.5, [pred("OpenAI", 0.7)])
+        Tracker.settle(self.conn, "G1", True)
+        self.assertIsNone(queries.list_games(self.conn)[0]["market_correct"])
+
 
 class ListGameDatesTests(QueriesTestCase):
     def test_distinct_dates_newest_first(self):

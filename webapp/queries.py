@@ -30,6 +30,18 @@ def _season_filter(segment: Optional[str], season_year: Optional[str]) -> tuple[
     return (" AND " + " AND ".join(conditions)) if conditions else "", params
 
 
+def _call_correct(prob: Optional[float], outcome: Optional[int]) -> Optional[bool]:
+    """
+    Did a YES-probability call end up matching the outcome? None (no color,
+    not right or wrong) if the game hasn't settled or the call was a flat
+    50/50 -- same "exactly 50% doesn't count as calling a side" rule used
+    by direction_accuracy in ai_stats().
+    """
+    if prob is None or outcome is None or prob == 0.5:
+        return None
+    return (prob > 0.5) == (outcome == 1)
+
+
 def list_games(
     conn: sqlite3.Connection,
     game_date: Optional[str] = None,
@@ -61,7 +73,8 @@ def list_games(
 
     sql = (
         "SELECT ticker, event_ticker, game_date, team, opponent, yes_bid, yes_ask, "
-        "       market_prob, outcome, COUNT(*), segment(game_date), season_year(game_date) "
+        "       market_prob, outcome, COUNT(*), AVG(predicted_prob), "
+        "       segment(game_date), season_year(game_date) "
         "FROM predictions "
         + where
         + "GROUP BY ticker ORDER BY game_date DESC, ticker"
@@ -77,13 +90,16 @@ def list_games(
             "yes_bid": yes_bid,
             "yes_ask": yes_ask,
             "market_prob": market_prob,
+            "ai_prob": ai_prob,
             "outcome": outcome,
             "ai_count": ai_count,
             "segment": seg,
             "season_year": year,
+            "market_correct": _call_correct(market_prob, outcome),
+            "ai_correct": _call_correct(ai_prob, outcome),
         }
         for (ticker, event_ticker, game_date, team, opponent, yes_bid, yes_ask,
-             market_prob, outcome, ai_count, seg, year) in rows
+             market_prob, outcome, ai_count, ai_prob, seg, year) in rows
     ]
 
 

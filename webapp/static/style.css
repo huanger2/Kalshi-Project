@@ -120,6 +120,7 @@ table a:hover { text-decoration: underline; }
     font-weight: 600;
 }
 .pill.pending { background: var(--pending-bg); color: var(--muted); }
+.pill.neutral { background: var(--pending-bg); color: var(--text); }
 .pill.won { background: var(--won-bg); color: var(--won); }
 .pill.lost { background: var(--lost-bg); color: var(--lost); }
 .pill.segment-preseason { background: var(--pending-bg); color: var(--muted); }
@@ -134,6 +135,9 @@ table a:hover { text-decoration: underline; }
 
 .edge-up { color: var(--won); font-weight: 700; }
 .edge-down { color: var(--lost); font-weight: 700; }
+
+.odds-correct { color: var(--won); font-weight: 700; }
+.odds-wrong { color: var(--lost); font-weight: 700; }
 
 .note { color: var(--muted); font-size: 0.82rem; margin-top: 0.75rem; }
 .empty { color: var(--muted); }
