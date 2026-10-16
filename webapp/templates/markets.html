@@ -74,9 +74,11 @@
             {% endfor %}
         </tbody>
     </table>
-    <p class="note">Result is colored by whose odds ended up closer to what actually happened:
-        green if the AIs' average was closer, red if Kalshi's price was closer, plain if they
-        were equally close.</p>
+    <p class="note">AI odds combine the 3 AIs' predictions, weighting each by its own confidence
+        and its accuracy weight (defaults to 1.00 for every AI -- see the accuracy table below),
+        not a bare average. Result is colored by whose odds ended up closer to what actually
+        happened: green if the AIs' combined odds were closer, red if Kalshi's price was closer,
+        plain if they were equally close.</p>
     {% endif %}
 </section>
 

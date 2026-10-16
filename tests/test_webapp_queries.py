@@ -1,5 +1,10 @@
+import json
+import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
 
+import AIWeights
 import Tracker
 from EVCalculator import LLMPrediction
 from webapp import queries
@@ -99,9 +104,37 @@ class ListGamesTests(QueriesTestCase):
         games = queries.list_games(self.conn, season_year="2026-27", segment="preseason")
         self.assertEqual([g["ticker"] for g in games], ["G1"])
 
-    def test_includes_the_average_ai_probability(self):
+    def test_includes_the_consensus_ai_probability(self):
+        # Equal confidence and (default) weight on both -- same as a plain average.
         self.record("G1", "Denver", 0.5, [pred("OpenAI", 0.7), pred("Claude", 0.5)])
         self.assertAlmostEqual(queries.list_games(self.conn)[0]["ai_prob"], 0.6)
+
+    def test_ai_prob_weights_by_confidence_not_a_bare_average(self):
+        self.record("G1", "Denver", 0.5, [pred("OpenAI", 0.9, 0.9), pred("Claude", 0.1, 0.1)])
+        ai_prob = queries.list_games(self.conn)[0]["ai_prob"]
+        # OpenAI's much higher confidence should pull this well above the
+        # 0.50 a bare average would give.
+        self.assertGreater(ai_prob, 0.70)
+
+    def test_ai_prob_uses_each_ais_configured_weight(self):
+        # AIWeights.py defaults every AI to 1.0 -- with equal confidence,
+        # too, this is a plain average regardless of either AI's track
+        # record (unlike Tracker's Brier-based weight, this one is a manual
+        # dial, not automatically derived from settled games).
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = Path(tmp.name) / "ai_weights.json"
+        patcher = mock.patch.object(AIWeights, "WEIGHTS_PATH", path)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        self.record("G1", "Denver", 0.5, [pred("Claude", 0.9, 0.9), pred("Gemini", 0.1, 0.9)])
+        path.write_text(json.dumps({"weights": {"claude": 1.0, "gemini": 1.0}}), encoding="utf-8")
+        self.assertAlmostEqual(queries.list_games(self.conn)[0]["ai_prob"], 0.50)
+
+        path.write_text(json.dumps({"weights": {"claude": 3.0, "gemini": 1.0}}), encoding="utf-8")
+        # Claude now counted 3x as heavily as Gemini: (.9*.9*3 + .1*.9*1) / (.9*3 + .9*1)
+        self.assertAlmostEqual(queries.list_games(self.conn)[0]["ai_prob"], 0.70)
 
     def test_market_correct_is_none_before_settlement(self):
         self.record("G1", "Denver", 0.6, [pred("OpenAI", 0.7)])

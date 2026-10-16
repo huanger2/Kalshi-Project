@@ -140,6 +140,41 @@ A couple of JSON endpoints (`/api/markets`, `/api/markets/{ticker}`,
 `/api/accuracy`, `/api/ai/{name}`) sit alongside the HTML pages for
 whatever consumes this next.
 
+### AI odds (consensus probability)
+
+The markets table's "AI odds" column combines the 3 AIs' predictions for a
+game into one number -- not a bare average, but each one weighted by its own
+confidence and its AI's weight, same `p_i` / `c_i` / `w_i` vocabulary as
+[`EVCalculator.py`](EVCalculator.py)'s EV score:
+
+```
+p = sum_i(p_i * c_i * w_i) / sum_i(c_i * w_i)
+```
+
+An AI that says 90% at 95% confidence counts for more than one that says 90%
+at 20% confidence. `w_i` comes from [`AIWeights.py`](AIWeights.py) /
+[`ai_weights.json`](ai_weights.json) -- a manually editable dial, every AI
+defaulting to 1.0 (equal weighting) until you decide otherwise:
+
+```json
+{
+    "weights": {
+        "claude": 1.0,
+        "openai": 1.0,
+        "gemini": 1.0
+    }
+}
+```
+
+This is deliberately separate from `Tracker.compute_weights()` (the
+Brier-score-based "EV weight" shown on each AI's tab): that's an automatic
+*measurement* of accuracy over settled games, and preseason games are
+inherently noisy -- teams aren't really trying to win, so results don't
+reflect either side's skill yet -- so an early Brier score swinging an AI's
+weight around isn't a signal worth trusting yet either. `ai_weights.json`
+stays at 1.0 for everyone until there's a real basis (e.g. a full regular
+season of settled games) to intentionally favor one AI over another.
+
 ### Season and segment
 
 Kalshi doesn't label a `KXNBAGAME` market with any of this (checked
@@ -278,8 +313,9 @@ day's run catches it up.
 | `Kalshi.py` | Kalshi API: markets, prices, today's games, current odds, results |
 | `ClaudeAi.py`, `OpenAi.py`, `Gemini.py` | One wrapper per AI API |
 | `AISettings.py`, `ai_settings.json` | Which model each AI uses |
+| `AIWeights.py`, `ai_weights.json` | Each AI's manually adjustable weight for the AI-odds consensus probability |
 | `Probability.py` | Builds the prompt, parses AI replies, runs the EV analysis |
-| `EVCalculator.py` | Confidence-weighted expected-value score vs. the market price |
+| `EVCalculator.py` | Confidence-weighted expected-value score vs. the market price, and the AI-odds consensus probability |
 | `Tracker.py`, `Export.py`, `Collect.py` | SQLite prediction tracking (the webapp's data source too), accuracy weights, Excel export |
 | `webapp/` | FastAPI app for browsing tracked markets and AI-vs-Kalshi comparisons |
 | `SeasonType.py`, `nba_season.json` | Derives a game date's season year (e.g. "2026-27") and segment (preseason/regular/postseason) |

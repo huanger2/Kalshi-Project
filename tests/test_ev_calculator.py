@@ -1,6 +1,6 @@
 import unittest
 
-from EVCalculator import EVCalculator, LLMPrediction
+from EVCalculator import EVCalculator, LLMPrediction, consensus_probability
 
 
 def preds(*triples):
@@ -105,6 +105,46 @@ class EVCalculatorTests(unittest.TestCase):
         text = str(EVCalculator().calculate(0.5, preds(("alpha", 0.7, 0.8))))
         self.assertIn("alpha", text)
         self.assertIn("Favoured side:    YES", text)
+
+
+class ConsensusProbabilityTests(unittest.TestCase):
+    def test_empty_predictions_returns_none(self):
+        self.assertIsNone(consensus_probability([]))
+
+    def test_matches_plain_average_when_confidence_and_weight_are_equal(self):
+        p = preds(("a", 0.70, 0.8), ("b", 0.50, 0.8))
+        self.assertAlmostEqual(consensus_probability(p), 0.60)
+
+    def test_higher_confidence_counts_for_more(self):
+        p = preds(("a", 0.90, 0.9), ("b", 0.10, 0.1))
+        result = consensus_probability(p)
+        # a's 0.9 confidence should pull the consensus far closer to its
+        # 0.90 pick than a plain average (0.50) would.
+        self.assertGreater(result, 0.70)
+
+    def test_zero_confidence_prediction_is_ignored(self):
+        p = preds(("a", 0.90, 1.0), ("b", 0.10, 0.0))
+        self.assertAlmostEqual(consensus_probability(p), 0.90)
+
+    def test_falls_back_to_plain_average_when_every_weighting_is_zero(self):
+        p = preds(("a", 0.90, 0.0), ("b", 0.10, 0.0))
+        self.assertAlmostEqual(consensus_probability(p), 0.50)
+
+    def test_weights_dict_overrides_prediction_weight(self):
+        p = [LLMPrediction("good", 0.90, 1.0), LLMPrediction("bad", 0.10, 1.0)]
+        result = consensus_probability(p, weights={"good": 3.0, "bad": 1.0})
+        # good counted 3x as heavily as bad: (.9*3 + .1*1) / 4 = .70
+        self.assertAlmostEqual(result, 0.70)
+
+    def test_a_zero_weight_llm_is_excluded(self):
+        p = [LLMPrediction("good", 0.80, 1.0), LLMPrediction("bad", 0.0, 1.0)]
+        result = consensus_probability(p, weights={"good": 1.0, "bad": 0.0})
+        self.assertAlmostEqual(result, 0.80)
+
+    def test_weights_dict_falls_back_to_the_predictions_own_weight(self):
+        p = [LLMPrediction("a", 0.80, 1.0, weight=2.0), LLMPrediction("b", 0.40, 1.0, weight=1.0)]
+        # no override for either name, so each uses pred.weight: (.8*2 + .4*1) / 3
+        self.assertAlmostEqual(consensus_probability(p), 2.0 / 3)
 
 
 if __name__ == "__main__":

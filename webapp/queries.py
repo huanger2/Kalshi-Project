@@ -74,8 +74,14 @@ def list_games(
     of each other, combinable freely.
 
     DailyLog.py logs only one team's market per game, so grouping by ticker
-    is equivalent to grouping by game here.
+    is equivalent to grouping by game here. "AI odds" is each game's
+    consensus_probability() across its predictions -- weighted by each
+    prediction's own confidence and its AI's manually-configured weight
+    (AIWeights.py, 1.0 for every AI by default) -- not a bare average.
     """
+    import AIWeights
+    from EVCalculator import LLMPrediction, consensus_probability
+
     conditions = []
     params: list = []
     if game_date:
@@ -91,15 +97,26 @@ def list_games(
 
     sql = (
         "SELECT ticker, event_ticker, game_date, team, opponent, yes_bid, yes_ask, "
-        "       market_prob, outcome, COUNT(*), AVG(predicted_prob), "
+        "       market_prob, outcome, COUNT(*), "
         "       segment(game_date), season_year(game_date) "
         "FROM predictions "
         + where
         + "GROUP BY ticker ORDER BY game_date DESC, ticker"
     )
     rows = conn.execute(sql, params).fetchall()
-    return [
-        {
+
+    predictions_by_ticker: dict[str, list[LLMPrediction]] = {}
+    pred_sql = "SELECT ticker, llm, predicted_prob, confidence FROM predictions " + where
+    for ticker, llm, predicted_prob, confidence in conn.execute(pred_sql, params).fetchall():
+        predictions_by_ticker.setdefault(ticker, []).append(
+            LLMPrediction(llm, predicted_prob, confidence, weight=AIWeights.get_weight(llm))
+        )
+
+    games = []
+    for (ticker, event_ticker, game_date, team, opponent, yes_bid, yes_ask,
+         market_prob, outcome, ai_count, seg, year) in rows:
+        ai_prob = consensus_probability(predictions_by_ticker.get(ticker, []))
+        games.append({
             "ticker": ticker,
             "event_ticker": event_ticker,
             "game_date": game_date,
@@ -116,10 +133,8 @@ def list_games(
             "market_correct": _call_correct(market_prob, outcome),
             "ai_correct": _call_correct(ai_prob, outcome),
             "ai_beat_market": _ai_beat_market(ai_prob, market_prob, outcome),
-        }
-        for (ticker, event_ticker, game_date, team, opponent, yes_bid, yes_ask,
-             market_prob, outcome, ai_count, ai_prob, seg, year) in rows
-    ]
+        })
+    return games
 
 
 def list_game_dates(
