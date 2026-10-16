@@ -32,6 +32,7 @@ upgrading it in ai_settings.json. Combine with `--only=` to limit that to
 specific AIs, since --force re-spends on every row for the ones it covers.
 """
 
+import contextlib
 import datetime
 import itertools
 import os
@@ -494,22 +495,48 @@ def run(
     return settled, len(new_rows)
 
 
+@contextlib.contextmanager
+def _prevent_sleep():
+    """
+    Hold the system awake for this run. schedule_task.ps1's -WakeToRun wakes
+    a sleeping machine to start this script, but that alone doesn't stop
+    Windows' own idle timer from putting it back to sleep a few minutes in
+    -- observed in practice: the 9am run got cut off mid-way, logged nothing
+    for the day, and left predictions.db a day stale. ES_SYSTEM_REQUIRED
+    tells Windows this process needs the system awake; cleared again on
+    exit so it doesn't keep the machine up after the run finishes. No-op on
+    non-Windows.
+    """
+    if sys.platform != "win32":
+        yield
+        return
+    import ctypes
+    ES_CONTINUOUS = 0x80000000
+    ES_SYSTEM_REQUIRED = 0x00000001
+    ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
+    try:
+        yield
+    finally:
+        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
+
+
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "backfill":
-        args = sys.argv[2:]
-        force = "--force" in args
-        only = next((a.split("=", 1)[1] for a in args if a.startswith("--only=")), None)
-        positional = [a for a in args if not a.startswith("--")]
+    with _prevent_sleep():
+        if len(sys.argv) > 1 and sys.argv[1] == "backfill":
+            args = sys.argv[2:]
+            force = "--force" in args
+            only = next((a.split("=", 1)[1] for a in args if a.startswith("--only=")), None)
+            positional = [a for a in args if not a.startswith("--")]
 
-        day = datetime.date.fromisoformat(positional[0]) if positional else datetime.date.today()
-        folder = positional[1] if len(positional) > 1 else DEFAULT_DIR
+            day = datetime.date.fromisoformat(positional[0]) if positional else datetime.date.today()
+            folder = positional[1] if len(positional) > 1 else DEFAULT_DIR
 
-        llms = default_llms()
-        if only:
-            names = {n.strip().lower() for n in only.split(",")}
-            llms = [(name, fn) for name, fn in llms if name.lower() in names]
+            llms = default_llms()
+            if only:
+                names = {n.strip().lower() for n in only.split(",")}
+                llms = [(name, fn) for name, fn in llms if name.lower() in names]
 
-        n = backfill_missing_predictions(day, folder, llms=llms, force=force)
-        print(f"backfilled {n} cell(s)" if n else "nothing to backfill")
-    else:
-        run(sys.argv[1] if len(sys.argv) > 1 else DEFAULT_DIR)
+            n = backfill_missing_predictions(day, folder, llms=llms, force=force)
+            print(f"backfilled {n} cell(s)" if n else "nothing to backfill")
+        else:
+            run(sys.argv[1] if len(sys.argv) > 1 else DEFAULT_DIR)
