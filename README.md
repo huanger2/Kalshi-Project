@@ -54,8 +54,10 @@ Which leagues get logged each day is set in [`leagues.json`](leagues.json):
 ```
 
 Every game costs one call to each AI, so on a busy day four leagues can mean
-40+ games (a full NFL Sunday alone is ~14). Remove a league from the list to
-stop spending on it; its existing data stays in `predictions.db` and the
+40+ games (a full NFL Sunday alone is ~14). Turn a league off with the
+**tracking switch on its tab in the webapp** (which rewrites just this
+`"enabled"` line), or remove it from the list by hand, to stop spending on
+it; its existing data stays in `predictions.db` and the
 webapp. Like `ai_settings.json`, edits take effect on the next run.
 
 All four leagues' Kalshi markets (`KXNBAGAME`, `KXNFLGAME`, `KXNHLGAME`,
@@ -149,9 +151,12 @@ py -m uvicorn webapp.main:app --reload
 Then open <http://127.0.0.1:8000/>. It reads `predictions.db` directly (see
 [`Tracker.py`](Tracker.py)) -- the one table `DailyLog.py` and `Collect.py`
 both write into as they run, so the page is always current with no refresh
-step of its own. It lists tracked games (filterable by league, by date, by
-season e.g. "2026-27", and independently by preseason/regular
-season/postseason), a detail page per game showing every
+step of its own. It lists tracked games under an "All markets" tab and a
+**tab per league** (`/league/NFL`), each filterable by date, by season e.g.
+"2026-27", and independently by preseason/regular season/postseason. Each
+league's tab has a switch to turn daily tracking for that league on or off
+(untracked leagues show dimmed in the tab bar). It also has a detail page
+per game showing every
 AI's prediction next to Kalshi's price and the "edge" between them, and a
 **tab per AI** (`/ai/{name}`) with its calibration stats and full
 prediction history (also filterable by league, since an AI can be sharp on
@@ -267,6 +272,18 @@ that day.
 This is a first framework pass, not a finished product: no auth, no
 pagination, plain server-rendered pages. Treat it as the foundation to
 build the "look at different markets" experience on, not the end state.
+
+### Hosting on Railway
+
+[`requirements.txt`](requirements.txt) and [`.python-version`](.python-version)
+let Railway's builder (Railpack) detect and build the project, and
+[`railway.json`](railway.json) starts the webapp with `python -m webapp`,
+which listens on the `$PORT` Railway provides (8000 when run locally).
+
+The database path comes from the `PREDICTIONS_DB` environment variable
+(default `predictions.db`). A Railway service's filesystem is wiped on every
+deploy, so for data that persists, attach a volume and set e.g.
+`PREDICTIONS_DB=/data/predictions.db`.
 
 ## Email alerts when an AI runs out of funds
 

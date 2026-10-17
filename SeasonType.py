@@ -42,6 +42,22 @@ def season_year_iso(game_date: Optional[str], league: Optional[str] = None) -> O
     return season_year(datetime.date.fromisoformat(game_date), league)
 
 
+def _config_date(value: str, league: str, key: str) -> datetime.date:
+    """
+    A hand-typed leagues.json date. Accepts "2026-10-7" as well as
+    "2026-10-07" (fromisoformat alone rejects the former); anything else
+    raises an error naming the entry, rather than a bare parse failure deep
+    inside a SQL query.
+    """
+    try:
+        year, month, day = (int(part) for part in value.split("-"))
+        return datetime.date(year, month, day)
+    except (ValueError, AttributeError):
+        raise ValueError(
+            f"{Leagues.CONFIG_PATH.name}: {league} {key} {value!r} isn't a date like \"2026-10-07\""
+        ) from None
+
+
 def segment(day: datetime.date, league: Optional[str] = None) -> str:
     """"preseason", "regular", or "postseason" -- which part of its season `day` falls in."""
     lg = Leagues.get(league)
@@ -49,9 +65,9 @@ def segment(day: datetime.date, league: Optional[str] = None) -> str:
     overrides = Leagues.season_overrides(lg.code, lg.season_label(start_year))
     regular_start, postseason_start = lg.default_boundaries(start_year)
     if overrides.get("regular_season_start"):
-        regular_start = datetime.date.fromisoformat(overrides["regular_season_start"])
+        regular_start = _config_date(overrides["regular_season_start"], lg.code, "regular_season_start")
     if overrides.get("postseason_start"):
-        postseason_start = datetime.date.fromisoformat(overrides["postseason_start"])
+        postseason_start = _config_date(overrides["postseason_start"], lg.code, "postseason_start")
 
     if day < regular_start:
         return "preseason"

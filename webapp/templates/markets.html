@@ -1,17 +1,30 @@
 {% extends "base.html" %}
-{% block title %}Markets - AI vs Kalshi{% endblock %}
+{% block title %}{{ selected_league ~ " " if selected_league }}Markets - AI vs Kalshi{% endblock %}
 {% block content %}
 
 <section class="panel">
-    <h1>Tracked markets</h1>
-    <form class="filters" method="get" action="/">
-        <label for="league">League</label>
-        <select name="league" id="league" onchange="this.form.season.value = ''; this.form.submit()">
-            <option value="" {% if not selected_league %}selected{% endif %}>All leagues</option>
-            {% for lg in leagues %}
-                <option value="{{ lg }}" {% if lg == selected_league %}selected{% endif %}>{{ lg }}</option>
-            {% endfor %}
-        </select>
+    <div class="panel-head">
+        <h1>{{ selected_league ~ " markets" if selected_league else "All tracked markets" }}</h1>
+        {% if selected_league %}
+            {% set on = selected_league in tracked_leagues() %}
+            <form method="post" action="/league/{{ selected_league }}/tracking">
+                <input type="hidden" name="enabled" value="{{ '0' if on else '1' }}">
+                <button type="submit" class="switch" role="switch" aria-checked="{{ 'true' if on else 'false' }}"
+                        title="{{ 'Stop' if on else 'Start' }} logging {{ selected_league }} games in the daily run">
+                    <span class="switch-track"><span class="switch-thumb"></span></span>
+                    <span>{{ "Tracking daily" if on else "Not tracking" }}</span>
+                </button>
+            </form>
+        {% endif %}
+    </div>
+    {% if selected_league %}
+        <p class="subtitle">
+            {% if on %}The daily run logs every {{ selected_league }} game and asks each AI about it.
+            {% else %}The daily run skips {{ selected_league }} games, so no AI calls are spent on them.
+                Games already logged stay here.{% endif %}
+        </p>
+    {% endif %}
+    <form class="filters" method="get" action="{{ '/league/' ~ selected_league if selected_league else '/' }}">
         <label for="season">Season</label>
         <select name="season" id="season" onchange="this.form.submit()">
             <option value="" {% if not selected_season %}selected{% endif %}>All seasons</option>

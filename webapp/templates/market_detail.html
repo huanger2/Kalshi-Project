@@ -2,7 +2,11 @@
 {% block title %}{{ game.team }} vs {{ game.opponent }} - AI vs Kalshi{% endblock %}
 {% block content %}
 
+{% if game.league %}
+<a class="back" href="/league/{{ game.league }}">&larr; {{ game.league }} markets</a>
+{% else %}
 <a class="back" href="/">&larr; All markets</a>
+{% endif %}
 
 <section class="panel">
     <h1>{{ game.team }} vs {{ game.opponent or "?" }}</h1>

@@ -25,6 +25,7 @@ league from the list to stop spending AI calls on it.
 
 import datetime
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
@@ -129,6 +130,43 @@ def enabled_leagues() -> list[str]:
     if unknown:
         raise ValueError(f"{CONFIG_PATH.name} lists unknown league(s) {unknown}; known: {list(LEAGUES)}")
     return [c.upper() for c in codes]
+
+
+def set_enabled(code: str, enabled: bool) -> list[str]:
+    """
+    Turn daily tracking for one league on or off (the webapp's per-league
+    switch) by rewriting leagues.json's "enabled" list, kept in LEAGUES
+    order. Only that one line of the file changes, so hand-written
+    formatting and season dates are left exactly as they were. Returns the
+    new list.
+
+    Turning a league off only stops DailyLog.py/Collect.py from querying it
+    from the next run on; its already-logged games stay in predictions.db.
+    """
+    code = get(code).code  # KeyError for an unknown league
+    tracked = set(enabled_leagues())
+    if enabled:
+        tracked.add(code)
+    else:
+        tracked.discard(code)
+    new_list = [c for c in LEAGUES if c in tracked]
+
+    try:
+        text = CONFIG_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        text = "{}"
+    text, replaced = re.subn(r'"enabled"\s*:\s*\[[^\]]*\]', '"enabled": ' + json.dumps(new_list), text, count=1)
+    if not replaced:
+        config = json.loads(text)
+        config["enabled"] = new_list
+        text = json.dumps(config, indent=4) + "\n"
+    json.loads(text)  # never write out a file that no longer parses
+
+    # Write-then-rename, so a run reading the file mid-write never sees half of it.
+    tmp = CONFIG_PATH.with_name(CONFIG_PATH.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(CONFIG_PATH)
+    return new_list
 
 
 def season_overrides(code: str, season: str) -> dict:

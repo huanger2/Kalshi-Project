@@ -45,6 +45,43 @@ class EnabledLeaguesTests(unittest.TestCase):
                 Leagues.enabled_leagues()
 
 
+class SetEnabledTests(unittest.TestCase):
+    SHIPPED_STYLE = (
+        '{\n    "_comment": "hi",\n    "enabled": ["NBA", "NFL", "NHL", "MLB"],\n    "seasons": {\n'
+        '        "NHL": {"2026-27": {"regular_season_start": "2026-10-7", "postseason_start": null}}\n    }\n}\n'
+    )
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.path = Path(tmp.name) / "leagues.json"
+        self.path.write_text(self.SHIPPED_STYLE, encoding="utf-8")
+        patcher = mock.patch.object(Leagues, "CONFIG_PATH", self.path)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_turning_a_league_off_and_back_on(self):
+        self.assertEqual(Leagues.set_enabled("NFL", False), ["NBA", "NHL", "MLB"])
+        self.assertEqual(Leagues.enabled_leagues(), ["NBA", "NHL", "MLB"])
+        self.assertEqual(Leagues.set_enabled("nfl", True), ["NBA", "NFL", "NHL", "MLB"])  # back in league order
+
+    def test_only_the_enabled_line_changes(self):
+        Leagues.set_enabled("MLB", False)
+        self.assertEqual(self.path.read_text(encoding="utf-8"),
+                         self.SHIPPED_STYLE.replace('"MLB"]', ']').replace('"NHL", ]', '"NHL"]'))
+
+    def test_a_file_without_an_enabled_list_gets_one(self):
+        self.path.write_text('{"seasons": {}}', encoding="utf-8")
+        Leagues.set_enabled("NBA", False)
+        self.assertEqual(json.loads(self.path.read_text(encoding="utf-8")),
+                         {"seasons": {}, "enabled": ["NFL", "NHL", "MLB"]})
+
+    def test_an_unknown_league_raises_and_leaves_the_file_alone(self):
+        with self.assertRaises(KeyError):
+            Leagues.set_enabled("WNBA", False)
+        self.assertEqual(self.path.read_text(encoding="utf-8"), self.SHIPPED_STYLE)
+
+
 class ConfigFileTests(unittest.TestCase):
     def test_missing_file_is_treated_as_no_config(self):
         with mock.patch.object(Leagues, "CONFIG_PATH", Path(tempfile.mktemp())):
@@ -62,7 +99,8 @@ class ConfigFileTests(unittest.TestCase):
 
     def test_the_shipped_config_file_is_valid_and_covers_every_league(self):
         config = json.loads(Leagues.CONFIG_PATH.read_text(encoding="utf-8"))
-        self.assertEqual(sorted(config["enabled"]), sorted(Leagues.LEAGUES))
+        # Which leagues are enabled is the user's call (the webapp switch edits it); just valid codes.
+        self.assertLessEqual(set(config["enabled"]), set(Leagues.LEAGUES))
         self.assertEqual(sorted(config["seasons"]), sorted(Leagues.LEAGUES))
 
 

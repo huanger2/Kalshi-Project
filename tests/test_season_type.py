@@ -155,6 +155,18 @@ class OtherLeagueSegmentTests(unittest.TestCase):
             self.assertEqual(segment(datetime.date(2026, 10, 17), "NHL"), "regular")
             self.assertEqual(segment(datetime.date(2026, 4, 20), "NHL"), "postseason")
 
+    def test_a_date_without_zero_padding_is_accepted(self):
+        config = {"seasons": {"NHL": {"2026-27": {"regular_season_start": "2026-10-7", "postseason_start": None}}}}
+        with mock.patch.object(Leagues, "load_config", return_value=config):
+            self.assertEqual(segment(datetime.date(2026, 10, 6), "NHL"), "preseason")
+            self.assertEqual(segment(datetime.date(2026, 10, 7), "NHL"), "regular")
+
+    def test_a_malformed_date_names_the_bad_entry(self):
+        config = {"seasons": {"NHL": {"2026-27": {"regular_season_start": "Oct 7", "postseason_start": None}}}}
+        with mock.patch.object(Leagues, "load_config", return_value=config):
+            with self.assertRaisesRegex(ValueError, "NHL regular_season_start 'Oct 7'"):
+                segment(datetime.date(2026, 10, 7), "NHL")
+
     def test_no_league_means_nba(self):
         self.assertEqual(segment(datetime.date(2026, 10, 10)), segment(datetime.date(2026, 10, 10), "NBA"))
 

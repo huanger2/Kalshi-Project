@@ -22,11 +22,14 @@ coin-flip is floored at 0.0. An NFL tie is scored as outcome 0: the market
 asked whether the team would win, and it didn't.
 """
 
+import os
 import sqlite3
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
-DEFAULT_DB = "predictions.db"
+# Overridable so a host with an ephemeral filesystem (e.g. Railway) can point
+# it at a mounted volume, e.g. PREDICTIONS_DB=/data/predictions.db.
+DEFAULT_DB = os.environ.get("PREDICTIONS_DB", "predictions.db")
 COIN_FLIP_BRIER = 0.25
 
 SCHEMA = """

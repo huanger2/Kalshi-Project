@@ -12,7 +12,14 @@
         <span class="tagline">NBA, NFL, NHL &amp; MLB prediction markets, compared</span>
     </header>
     <nav class="tabs">
-        <a href="/" class="{% if active_tab == 'markets' %}active{% endif %}">Markets</a>
+        {% set tracked = tracked_leagues() %}
+        <a href="/" class="{% if active_tab == 'markets' %}active{% endif %}">All markets</a>
+        {% for lg in league_codes %}
+            <a href="/league/{{ lg }}"
+               class="{% if active_tab == lg %}active{% endif %}{% if lg not in tracked %} untracked{% endif %}"
+               {% if lg not in tracked %}title="Not tracking {{ lg }}"{% endif %}>{{ lg }}</a>
+        {% endfor %}
+        <span class="tab-divider" aria-hidden="true"></span>
         {% for name in ai_names %}
             <a href="/ai/{{ name }}" class="{% if active_tab == name %}active{% endif %}">{{ name }}</a>
         {% endfor %}

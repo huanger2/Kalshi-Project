@@ -1,0 +1,15 @@
+# Webapp
+fastapi==0.142.4
+uvicorn==0.54.0
+jinja2==3.1.6
+python-multipart==0.0.32
+
+# Data pipeline (the webapp imports DailyLog/Tracker, so these are needed either way)
+pandas==3.0.3
+openpyxl==3.1.5
+requests==2.34.2
+python-dotenv==1.2.2
+
+# AI APIs (ClaudeAi.py also goes through the openai client)
+openai==2.42.0
+google-genai==2.4.0

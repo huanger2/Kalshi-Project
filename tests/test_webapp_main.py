@@ -1,8 +1,13 @@
+import json
+import shutil
 import tempfile
 import unittest
+from pathlib import Path
+from unittest import mock
 
 from fastapi.testclient import TestClient
 
+import Leagues
 import Tracker
 from EVCalculator import LLMPrediction
 from webapp.main import app, get_db
@@ -40,6 +45,21 @@ class WebAppTestCase(unittest.TestCase):
 
         app.dependency_overrides[get_db] = override_get_db
         self.addCleanup(app.dependency_overrides.pop, get_db, None)
+
+        # A throwaway copy of leagues.json, so the tracking switch's writes
+        # never touch the real file.
+        config_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(config_dir.cleanup)
+        self.config_path = Path(config_dir.name) / "leagues.json"
+        shutil.copy(Leagues.CONFIG_PATH, self.config_path)
+        # Start every test with all leagues tracked, whatever the real file says today.
+        config = json.loads(self.config_path.read_text(encoding="utf-8"))
+        config["enabled"] = list(Leagues.LEAGUES)
+        self.config_path.write_text(json.dumps(config), encoding="utf-8")
+        patcher = mock.patch.object(Leagues, "CONFIG_PATH", self.config_path)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
         self.client = TestClient(app)
 
     def _remove_db(self):
@@ -84,17 +104,18 @@ class MarketsPageTests(WebAppTestCase):
         self.assertIn("Denver", r.text)
         self.assertNotIn("Golden State", r.text)
 
-    def test_league_filter_excludes_other_leagues(self):
+    def test_the_all_markets_tab_shows_every_league(self):
         self.record("KXNFLGAME-26OCT25KCSEA-SEA", "Seattle", 0.6, 0.7, game_date="2026-10-25")
         self.record("KXNHLGAME-26OCT23TBCOL-TB", "Tampa Bay", 0.5, 0.5, game_date="2026-10-23")
-        r = self.client.get("/", params={"league": "NFL"})
-        self.assertIn("Seattle", r.text)
-        self.assertNotIn("Tampa Bay", r.text)
-
-    def test_league_dropdown_lists_every_league(self):
         r = self.client.get("/")
-        for league in ("NBA", "NFL", "NHL", "MLB"):
-            self.assertIn(f'value="{league}"', r.text)
+        self.assertIn("Seattle", r.text)
+        self.assertIn("Tampa Bay", r.text)
+
+    def test_every_page_has_a_tab_per_league(self):
+        for url in ("/", "/ai/OpenAI"):
+            r = self.client.get(url)
+            for league in ("NBA", "NFL", "NHL", "MLB"):
+                self.assertIn(f'href="/league/{league}"', r.text)
 
     def test_a_tie_renders_as_a_tie(self):
         self.record("KXNFLGAME-26OCT11NYGWAS-WAS", "Washington", 0.5, 0.6, game_date="2026-10-11")
@@ -137,6 +158,64 @@ class MarketsPageTests(WebAppTestCase):
         self.assertIn("Golden State", r.text)
         self.assertNotIn("Denver", r.text)
         self.assertNotIn("Boston", r.text)
+
+
+class LeagueTabTests(WebAppTestCase):
+    def setUp(self):
+        super().setUp()
+        self.record("KXNFLGAME-26OCT25KCSEA-SEA", "Seattle", 0.6, 0.7, game_date="2026-10-25")
+        self.record("KXNHLGAME-26OCT23TBCOL-TB", "Tampa Bay", 0.5, 0.5, game_date="2026-10-23")
+
+    def enabled(self):
+        return json.loads(self.config_path.read_text(encoding="utf-8"))["enabled"]
+
+    def test_a_league_tab_shows_only_that_leagues_games(self):
+        r = self.client.get("/league/NFL")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("NFL markets", r.text)
+        self.assertIn("Seattle", r.text)
+        self.assertNotIn("Tampa Bay", r.text)
+
+    def test_the_tab_is_case_insensitive(self):
+        self.assertIn("Seattle", self.client.get("/league/nfl").text)
+
+    def test_an_unknown_league_is_a_404(self):
+        self.assertEqual(self.client.get("/league/WNBA").status_code, 404)
+        self.assertEqual(self.client.post("/league/WNBA/tracking", data={"enabled": "0"}).status_code, 404)
+
+    def test_filters_stay_on_the_league_tab(self):
+        self.assertIn('action="/league/NHL"', self.client.get("/league/NHL").text)
+
+    def test_the_switch_shows_whether_the_league_is_tracked(self):
+        self.assertIn('aria-checked="true"', self.client.get("/league/NFL").text)
+        Leagues.set_enabled("NFL", False)
+        r = self.client.get("/league/NFL")
+        self.assertIn('aria-checked="false"', r.text)
+        self.assertIn("Not tracking", r.text)
+
+    def test_turning_tracking_off_updates_leagues_json_and_redirects_back(self):
+        r = self.client.post("/league/NFL/tracking", data={"enabled": "0"}, follow_redirects=False)
+        self.assertEqual(r.status_code, 303)
+        self.assertEqual(r.headers["location"], "/league/NFL")
+        self.assertNotIn("NFL", self.enabled())
+
+    def test_turning_tracking_back_on(self):
+        self.client.post("/league/NFL/tracking", data={"enabled": "0"})
+        self.client.post("/league/NFL/tracking", data={"enabled": "1"})
+        self.assertIn("NFL", self.enabled())
+
+    def test_an_untracked_leagues_games_are_still_shown(self):
+        self.client.post("/league/NFL/tracking", data={"enabled": "0"})
+        self.assertIn("Seattle", self.client.get("/league/NFL").text)
+
+    def test_an_untracked_league_is_dimmed_in_the_nav(self):
+        self.client.post("/league/NHL/tracking", data={"enabled": "0"})
+        self.assertIn('title="Not tracking NHL"', self.client.get("/").text)
+        self.assertNotIn('title="Not tracking NFL"', self.client.get("/").text)
+
+    def test_a_game_page_highlights_and_links_back_to_its_league(self):
+        r = self.client.get("/markets/KXNHLGAME-26OCT23TBCOL-TB")
+        self.assertIn('href="/league/NHL">&larr; NHL markets', r.text)
 
 
 class MarketDetailPageTests(WebAppTestCase):
