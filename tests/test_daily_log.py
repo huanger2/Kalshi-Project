@@ -60,11 +60,12 @@ class DailyLogTestCase(unittest.TestCase):
 
     def run_day(self, today, markets=(), results=(), llms=LLMS):
         """Run DailyLog for `today` with Kalshi and CostExport mocked out; returns today's sheet."""
-        with mock.patch.object(DailyLog, "get_todays_nba_games", return_value=list(markets)), \
-             mock.patch.object(DailyLog, "get_nba_results", return_value=list(results)) as get_results, \
+        with mock.patch.object(DailyLog, "get_todays_games", return_value=list(markets)), \
+             mock.patch.object(DailyLog, "get_results", return_value=list(results)) as get_results, \
              mock.patch.object(DailyLog, "CostExport") as cost_export, \
              contextlib.redirect_stdout(io.StringIO()):
-            self.counts = DailyLog.run(self.folder, today=today, llms=llms, db_path=self.db_path)
+            self.counts = DailyLog.run(self.folder, today=today, llms=llms, db_path=self.db_path,
+                                        leagues=["NBA"])
         self.get_results = get_results
         self.cost_export = cost_export
         return self.sheet(today)
@@ -137,7 +138,7 @@ class FillResultsTests(DailyLogTestCase):
         self.run_day(datetime.date(2026, 10, 5), results=self.RESULTS)
         df = self.sheet(OCT4)  # results go in the file for the day the game was played
 
-        self.get_results.assert_called_once_with(OCT4)
+        self.get_results.assert_called_once_with(OCT4, "NBA")
         row = df[df.event_ticker == "KXNBAGAME-26OCT04UTADEN"].iloc[0]
         self.assertEqual(row["winner"], "Utah")
         self.assertEqual(row["team_won"], 0)  # the row is for Denver, who lost
@@ -161,7 +162,7 @@ class FillResultsTests(DailyLogTestCase):
         self.run_day(OCT4, TODAY_MARKETS[:2])
         self.run_day(datetime.date(2026, 10, 5), results=[])  # result not in yet
         self.run_day(datetime.date(2026, 10, 7), results=self.RESULTS)
-        self.get_results.assert_called_once_with(OCT4)
+        self.get_results.assert_called_once_with(OCT4, "NBA")
         self.assertEqual(self.sheet(OCT4).iloc[0]["winner"], "Utah")
 
     def test_todays_own_games_are_not_settled_yet(self):
@@ -224,13 +225,13 @@ class LayoutTests(DailyLogTestCase):
         groups = [v for v in self.row_values(1) if v]
         self.assertEqual(groups, ["Game", "Kalshi odds", "OpenAI", "Claude", "Gemini", "Result", "Details"])
         merged = {str(r) for r in self.ws.merged_cells.ranges}
-        self.assertIn("G1:I1", merged)  # OpenAI spans its three columns (win %, confidence, model)
+        self.assertIn("H1:J1", merged)  # OpenAI spans its three columns (win %, confidence, model)
 
     def test_row_2_has_readable_headers(self):
         headers = self.row_values(2)
         self.assertEqual(headers[:8], [
-            "Game date", "Team", "Opponent", "Kalshi bid", "Kalshi ask",
-            "Kalshi implied win %", "OpenAI win %", "OpenAI confidence",
+            "Game date", "League", "Team", "Opponent", "Kalshi bid", "Kalshi ask",
+            "Kalshi implied win %", "OpenAI win %",
         ])
         self.assertIn("Claude confidence", headers)
         self.assertIn("Team won? (1 = yes)", headers)
@@ -250,7 +251,7 @@ class LayoutTests(DailyLogTestCase):
         self.assertEqual(color("Claude win %"), color("Claude confidence"))
 
     def test_headers_stay_visible_when_scrolling(self):
-        self.assertEqual(self.ws.freeze_panes, "D3")
+        self.assertEqual(self.ws.freeze_panes, "E3")
 
     def test_column_guide_explains_every_column_and_its_source(self):
         guide = self.wb["Column guide"]
@@ -474,6 +475,80 @@ class BackfillTests(DailyLogTestCase):
         self.assertAlmostEqual(self.sheet(OCT4).iloc[0]["gemini_prob"], 0.55)  # original LLMS value
 
 
+NFL_MARKETS = [
+    game_market("KXNFLGAME-26OCT04DALPHI-PHI", "Philadelphia"),
+    game_market("KXNFLGAME-26OCT04DALPHI-DAL", "Dallas", bid="0.38", ask="0.40"),
+]
+NHL_MARKETS = [
+    game_market("KXNHLGAME-26OCT04TBCOL-TB", "Tampa Bay"),
+    game_market("KXNHLGAME-26OCT04TBCOL-COL", "Colorado", bid="0.38", ask="0.40"),
+]
+
+
+class MultiLeagueTests(DailyLogTestCase):
+    BY_LEAGUE = {"NBA": TODAY_MARKETS[:2], "NFL": NFL_MARKETS, "NHL": NHL_MARKETS, "MLB": []}
+
+    def run_leagues(self, today, leagues, results_by_league=None):
+        results_by_league = results_by_league or {}
+        with mock.patch.object(DailyLog, "get_todays_games",
+                               side_effect=lambda league, day: list(self.BY_LEAGUE[league]) if day == OCT4 else []), \
+             mock.patch.object(DailyLog, "get_results",
+                               side_effect=lambda day, league: list(results_by_league.get(league, []))) as gr, \
+             mock.patch.object(DailyLog, "CostExport"), \
+             contextlib.redirect_stdout(io.StringIO()):
+            DailyLog.run(self.folder, today=today, llms=LLMS, db_path=self.db_path, leagues=leagues)
+        self.get_results = gr
+        return self.sheet(today)
+
+    def test_logs_every_requested_league_into_one_days_file(self):
+        df = self.run_leagues(OCT4, ["NBA", "NFL", "NHL", "MLB"])
+        self.assertEqual(sorted(df["league"]), ["NBA", "NFL", "NHL"])
+        nfl = df[df.league == "NFL"].iloc[0]
+        self.assertEqual((nfl["team"], nfl["opponent"]), ("Philadelphia", "Dallas"))
+
+    def test_only_the_requested_leagues_are_queried(self):
+        df = self.run_leagues(OCT4, ["NHL"])
+        self.assertEqual(list(df["league"]), ["NHL"])
+
+    def test_defaults_to_the_leagues_enabled_in_leagues_json(self):
+        with mock.patch.object(DailyLog.Leagues, "enabled_leagues", return_value=["NFL"]):
+            df = self.run_leagues(OCT4, None)
+        self.assertEqual(list(df["league"]), ["NFL"])
+
+    def test_results_are_fetched_per_league(self):
+        self.run_leagues(OCT4, ["NBA", "NFL"])
+        self.run_leagues(datetime.date(2026, 10, 5), ["NBA", "NFL"])
+        self.assertEqual(sorted(c.args[1] for c in self.get_results.call_args_list), ["NBA", "NFL"])
+
+    def test_an_nfl_tie_is_recorded_as_no_team_winning(self):
+        self.run_leagues(OCT4, ["NFL"])
+        tie = [{"event_ticker": "KXNFLGAME-26OCT04DALPHI", "winner": None, "loser": None, "tie": True}]
+        self.run_leagues(datetime.date(2026, 10, 5), ["NFL"], {"NFL": tie})
+
+        row = self.sheet(OCT4).iloc[0]
+        self.assertEqual(row["winner"], "Tie")
+        self.assertEqual(row["team_won"], 0)
+        conn = Tracker.connect(self.db_path)
+        self.addCleanup(conn.close)
+        self.assertEqual(set(conn.execute("SELECT outcome, tied FROM predictions")), {(0, 1)})
+
+    def test_league_is_recorded_in_predictions_db(self):
+        self.run_leagues(OCT4, ["NFL", "NHL"])
+        conn = Tracker.connect(self.db_path)
+        self.addCleanup(conn.close)
+        self.assertEqual({r[0] for r in conn.execute("SELECT DISTINCT league FROM predictions")}, {"NFL", "NHL"})
+
+    def test_a_file_from_before_the_league_column_reads_as_nba(self):
+        old = pd.DataFrame([{
+            "game_date": "2026-10-04", "event_ticker": "KXNBAGAME-26OCT04UTADEN",
+            "ticker": "KXNBAGAME-26OCT04UTADEN-DEN", "team": "Denver", "opponent": "Utah",
+            "market_prob": 0.61, "openai_prob": 0.7, "winner": None,
+        }])
+        os.makedirs(self.folder)
+        old.to_excel(self.path, index=False)
+        self.assertEqual(DailyLog.load(self.path).iloc[0]["league"], "NBA")
+
+
 class CostExportIntegrationTests(DailyLogTestCase):
     def test_cost_spreadsheet_is_refreshed_after_every_run(self):
         self.run_day(OCT4, TODAY_MARKETS)
@@ -484,12 +559,12 @@ class CostExportIntegrationTests(DailyLogTestCase):
         self.cost_export.export_to_excel.assert_called_once()
 
     def test_a_locked_cost_spreadsheet_does_not_fail_the_whole_run(self):
-        with mock.patch.object(DailyLog, "get_todays_nba_games", return_value=list(TODAY_MARKETS)), \
-             mock.patch.object(DailyLog, "get_nba_results", return_value=[]), \
+        with mock.patch.object(DailyLog, "get_todays_games", return_value=list(TODAY_MARKETS)), \
+             mock.patch.object(DailyLog, "get_results", return_value=[]), \
              mock.patch.object(DailyLog, "CostExport") as cost_export, \
              contextlib.redirect_stdout(io.StringIO()):
             cost_export.export_to_excel.side_effect = PermissionError("locked")
-            counts = DailyLog.run(self.folder, today=OCT4, llms=LLMS, db_path=self.db_path)
+            counts = DailyLog.run(self.folder, today=OCT4, llms=LLMS, db_path=self.db_path, leagues=["NBA"])
         # Games were still logged despite the cost-export step failing.
         self.assertEqual(counts, (0, 2))
 

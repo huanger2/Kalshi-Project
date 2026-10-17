@@ -127,6 +127,66 @@ class SettleFromKalshiTests(TrackerTestCase):
         self.assertEqual(settled, {"YESGAME": True, "NOGAME": False})
         self.assertEqual(Tracker.unsettled_tickers(self.conn), ["LIVEGAME"])
 
+    def test_a_tie_settles_as_no_team_winning_and_is_flagged(self):
+        self.add("TIEGAME", "A", 0.6)
+        settled = Tracker.settle_from_kalshi(
+            self.conn,
+            fetch_market=lambda t: {"ticker": t, "result": "scalar", "settlement_value_dollars": "0.5000"},
+        )
+        self.assertEqual(settled, {"TIEGAME": False})
+        self.assertEqual(self.conn.execute("SELECT outcome, tied FROM predictions").fetchone(), (0, 1))
+
+    def test_a_tie_counts_toward_brier_as_a_zero(self):
+        self.add("TIEGAME", "A", 0.6)
+        Tracker.settle(self.conn, "TIEGAME", False, tie=True)
+        self.assertAlmostEqual(Tracker.brier_scores(self.conn)["A"]["brier"], 0.36)  # (0.6 - 0)^2
+
+
+class LeagueTests(TrackerTestCase):
+    def test_league_is_derived_from_the_ticker(self):
+        self.add("KXNFLGAME-26OCT26DALPHI-PHI", "A", 0.6)
+        self.add("KXNHLGAME-26OCT23TBCOL-TB", "A", 0.6)
+        leagues = dict(self.conn.execute("SELECT ticker, league FROM predictions"))
+        self.assertEqual(leagues, {"KXNFLGAME-26OCT26DALPHI-PHI": "NFL", "KXNHLGAME-26OCT23TBCOL-TB": "NHL"})
+
+    def test_connect_backfills_league_on_rows_from_before_the_column_existed(self):
+        import os
+        import sqlite3
+        import tempfile
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = os.path.join(tmp.name, "old.db")
+        old = sqlite3.connect(path)
+        old.execute("CREATE TABLE predictions (id INTEGER PRIMARY KEY, created_at TEXT NOT NULL, "
+                    "ticker TEXT NOT NULL, event_ticker TEXT, title TEXT, llm TEXT NOT NULL, "
+                    "predicted_prob REAL NOT NULL, confidence REAL NOT NULL, market_prob REAL NOT NULL, "
+                    "outcome INTEGER, settled_at TEXT)")
+        old.execute("INSERT INTO predictions (created_at, ticker, llm, predicted_prob, confidence, market_prob) "
+                    "VALUES ('x', 'KXNBAGAME-26OCT04UTADEN-DEN', 'A', 0.6, 0.8, 0.5)")
+        old.commit()
+        old.close()
+
+        conn = Tracker.connect(path)
+        self.addCleanup(conn.close)
+        self.assertEqual(conn.execute("SELECT league FROM predictions").fetchone()[0], "NBA")
+
+    def test_league_scopes_brier_scores(self):
+        self.add("KXNFLGAME-26OCT26DALPHI-PHI", "A", 0.9, game_date="2026-10-26")
+        self.add("KXNHLGAME-26OCT23TBCOL-TB", "A", 0.9, game_date="2026-10-23")
+        Tracker.settle(self.conn, "KXNFLGAME-26OCT26DALPHI-PHI", True)   # (0.9-1)^2 = 0.01
+        Tracker.settle(self.conn, "KXNHLGAME-26OCT23TBCOL-TB", False)    # (0.9-0)^2 = 0.81
+        self.assertAlmostEqual(Tracker.brier_scores(self.conn, league="NFL")["A"]["brier"], 0.01)
+        self.assertAlmostEqual(Tracker.brier_scores(self.conn, league="NHL")["A"]["brier"], 0.81)
+
+    def test_season_year_uses_each_rows_own_league_calendar(self):
+        self.add("KXNFLGAME-26OCT26DALPHI-PHI", "A", 0.9, game_date="2026-10-26")
+        self.add("KXNHLGAME-26OCT23TBCOL-TB", "A", 0.9, game_date="2026-10-23")
+        Tracker.settle(self.conn, "KXNFLGAME-26OCT26DALPHI-PHI", True)
+        Tracker.settle(self.conn, "KXNHLGAME-26OCT23TBCOL-TB", False)
+        self.assertEqual(Tracker.brier_scores(self.conn, season_year="2026")["A"]["n"], 1)
+        self.assertEqual(Tracker.brier_scores(self.conn, season_year="2026-27")["A"]["n"], 1)
+
 
 class BrierTests(TrackerTestCase):
     def test_brier_score_is_mean_squared_error_against_outcome(self):

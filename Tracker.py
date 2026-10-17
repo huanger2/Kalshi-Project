@@ -18,7 +18,8 @@ outcome is 1 (YES) or 0 (NO). Lower is better. Always answering 50% scores
     weight = clamp(1 - brier / 0.25, 0, 1)
 
 A perfect forecaster gets 1.0, a coin-flip 0.0, and anything worse than a
-coin-flip is floored at 0.0.
+coin-flip is floored at 0.0. An NFL tie is scored as outcome 0: the market
+asked whether the team would win, and it didn't.
 """
 
 import sqlite3
@@ -34,6 +35,7 @@ CREATE TABLE IF NOT EXISTS predictions (
     created_at     TEXT    NOT NULL,
     ticker         TEXT    NOT NULL,
     event_ticker   TEXT,
+    league         TEXT,             -- "NBA", "NFL", "NHL", "MLB" (see Leagues.py)
     title          TEXT,
     team           TEXT,             -- the side this row's prediction is about
     opponent       TEXT,
@@ -46,6 +48,7 @@ CREATE TABLE IF NOT EXISTS predictions (
     confidence     REAL    NOT NULL,
     market_prob    REAL    NOT NULL,
     outcome        INTEGER,          -- 1 = YES won, 0 = NO won, NULL = not settled yet
+    tied           INTEGER,          -- 1 if the game was a tie (NFL): outcome is 0, nobody won
     settled_at     TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_predictions_ticker ON predictions (ticker);
@@ -57,15 +60,27 @@ CREATE INDEX IF NOT EXISTS idx_predictions_event ON predictions (event_ticker);
 # before these columns existed needs them added explicitly.
 _MIGRATED_COLUMNS = {
     "team": "TEXT", "opponent": "TEXT", "game_date": "TEXT",
-    "yes_bid": "REAL", "yes_ask": "REAL", "model": "TEXT",
+    "yes_bid": "REAL", "yes_ask": "REAL", "model": "TEXT", "league": "TEXT", "tied": "INTEGER",
 }
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
+    import Leagues
+
     existing = {row[1] for row in conn.execute("PRAGMA table_info(predictions)")}
     for column, sql_type in _MIGRATED_COLUMNS.items():
         if column not in existing:
             conn.execute(f"ALTER TABLE predictions ADD COLUMN {column} {sql_type}")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_predictions_league ON predictions (league)")
+
+    # Rows from before the league column existed: the ticker says which
+    # league they're from (all NBA in practice, the only league tracked then).
+    unlabeled = conn.execute("SELECT DISTINCT ticker FROM predictions WHERE league IS NULL").fetchall()
+    for (ticker,) in unlabeled:
+        league = Leagues.league_for_ticker(ticker)
+        if league:
+            conn.execute("UPDATE predictions SET league = ? WHERE ticker = ? AND league IS NULL",
+                         (league, ticker))
 
 
 def _now() -> str:
@@ -78,11 +93,12 @@ def connect(db_path: str = DEFAULT_DB) -> sqlite3.Connection:
 
     Registers two SQL functions on every connection, so queries can filter
     or group by either without storing them as columns -- both are purely
-    derived from game_date, so a query always reflects the current
-    nba_season.json, never a stale snapshot from whenever a row was inserted:
+    derived from game_date and league, so a query always reflects the
+    current leagues.json, never a stale snapshot from whenever a row was
+    inserted:
 
-        segment(game_date)     -- "preseason", "regular", or "postseason"
-        season_year(game_date) -- the year-spanning season, e.g. "2026-27"
+        segment(game_date, league)     -- "preseason", "regular", or "postseason"
+        season_year(game_date, league) -- the season, e.g. "2026-27" (NBA/NHL) or "2026" (NFL/MLB)
 
     (See SeasonType.py.)
     """
@@ -92,8 +108,8 @@ def connect(db_path: str = DEFAULT_DB) -> sqlite3.Connection:
     conn.executescript(SCHEMA)
     _migrate(conn)
     conn.commit()
-    conn.create_function("segment", 1, SeasonType.segment_iso)
-    conn.create_function("season_year", 1, SeasonType.season_year_iso)
+    conn.create_function("segment", 2, SeasonType.segment_iso)
+    conn.create_function("season_year", 2, SeasonType.season_year_iso)
     return conn
 
 
@@ -123,6 +139,7 @@ def record_predictions(
     Returns:
         Number of rows inserted.
     """
+    import Leagues
     from AISettings import get_model
 
     def model_for(llm_name: str) -> Optional[str]:
@@ -141,6 +158,7 @@ def record_predictions(
             now,
             market["ticker"],
             market.get("event_ticker"),
+            Leagues.league_for_ticker(market["ticker"]),
             market.get("title"),
             team,
             opponent,
@@ -157,20 +175,28 @@ def record_predictions(
     ]
     conn.executemany(
         "INSERT INTO predictions "
-        "(created_at, ticker, event_ticker, title, team, opponent, game_date, yes_bid, yes_ask, "
+        "(created_at, ticker, event_ticker, league, title, team, opponent, game_date, yes_bid, yes_ask, "
         " llm, model, predicted_prob, confidence, market_prob) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rows,
     )
     conn.commit()
     return len(rows)
 
 
-def settle(conn: sqlite3.Connection, ticker: str, yes_won: bool) -> int:
-    """Record the final outcome for every prediction on a ticker. Returns rows updated."""
+def settle(conn: sqlite3.Connection, ticker: str, yes_won: bool, tie: bool = False) -> int:
+    """
+    Record the final outcome for every prediction on a ticker. Returns rows updated.
+
+    A tie (NFL only) means no team won, so it's recorded as outcome 0 like
+    a loss -- but also flagged `tied`, so the webapp doesn't treat it as
+    the other team winning: it's left out of "called the winner" and the
+    won/lost edge averages, though it still counts toward the Brier score.
+    """
+    yes_won = bool(yes_won) and not tie
     cur = conn.execute(
-        "UPDATE predictions SET outcome = ?, settled_at = ? WHERE ticker = ? AND outcome IS NULL",
-        (1 if yes_won else 0, _now(), ticker),
+        "UPDATE predictions SET outcome = ?, tied = ?, settled_at = ? WHERE ticker = ? AND outcome IS NULL",
+        (1 if yes_won else 0, 1 if tie else None, _now(), ticker),
     )
     conn.commit()
     return cur.rowcount
@@ -195,19 +221,21 @@ def settle_from_kalshi(
                       injectable so tests don't touch the network.
 
     Returns:
-        {ticker: yes_won} for the markets that had settled.
+        {ticker: yes_won} for the markets that had settled (False for a tie).
     """
     if fetch_market is None:
         from Kalshi import get_market
         fetch_market = get_market
-    from Kalshi import get_market_result
+    from Kalshi import get_market_result, is_tie
 
     settled = {}
     for ticker in unsettled_tickers(conn):
-        result = get_market_result(fetch_market(ticker))
+        market = fetch_market(ticker)
+        tie = is_tie(market)
+        result = False if tie else get_market_result(market)
         if result is None:
             continue
-        settle(conn, ticker, result)
+        settle(conn, ticker, result, tie=tie)
         settled[ticker] = result
     return settled
 
@@ -216,6 +244,7 @@ def brier_scores(
     conn: sqlite3.Connection,
     segment: Optional[str] = None,
     season_year: Optional[str] = None,
+    league: Optional[str] = None,
 ) -> dict[str, dict]:
     """
     Per-LLM accuracy over settled predictions.
@@ -225,7 +254,9 @@ def brier_scores(
     are inherently noisier (limited rotations, no real stakes) regardless
     of an AI's actual skill, so mixing them in with regular-season/playoff
     games muddies the signal either way. Pass season_year (e.g. "2026-27")
-    to scope to one year-spanning season instead. The two combine freely.
+    to scope to one season instead, and league (e.g. "NFL") to one league --
+    an AI can be sharp on one sport and poor on another. All three combine
+    freely.
 
     Returns {llm: {"n": count, "brier": mean squared error,
                    "market_brier": the market's own score on the same games}}.
@@ -233,11 +264,14 @@ def brier_scores(
     where = "WHERE outcome IS NOT NULL"
     params: list = []
     if segment:
-        where += " AND segment(game_date) = ?"
+        where += " AND segment(game_date, league) = ?"
         params.append(segment)
     if season_year:
-        where += " AND season_year(game_date) = ?"
+        where += " AND season_year(game_date, league) = ?"
         params.append(season_year)
+    if league:
+        where += " AND league = ?"
+        params.append(league)
     rows = conn.execute(
         f"SELECT llm, COUNT(*), "
         f"       AVG((predicted_prob - outcome) * (predicted_prob - outcome)), "
@@ -259,6 +293,7 @@ def compute_weights(
     default_weight: float = 1.0,
     segment: Optional[str] = None,
     season_year: Optional[str] = None,
+    league: Optional[str] = None,
 ) -> dict[str, float]:
     """
     Accuracy weight in [0, 1] for each LLM seen so far.
@@ -266,7 +301,7 @@ def compute_weights(
     An LLM with fewer than ``min_samples`` settled predictions keeps
     ``default_weight`` because a handful of games says little about skill.
 
-    segment/season_year scope the underlying Brier score the same way
+    segment/season_year/league scope the underlying Brier score the same way
     brier_scores() does -- see its docstring.
     """
     weights = {}
@@ -274,7 +309,7 @@ def compute_weights(
     for (llm,) in seen:
         weights[llm] = default_weight
 
-    scores = brier_scores(conn, segment=segment, season_year=season_year)
+    scores = brier_scores(conn, segment=segment, season_year=season_year, league=league)
     for llm, stats in scores.items():
         if stats["n"] >= min_samples:
             weights[llm] = brier_to_weight(stats["brier"])

@@ -3,7 +3,7 @@ Collect.py
 
 Command-line workflow for accumulating LLM accuracy data.
 
-    py Collect.py collect [N]        query the LLMs on up to N open NBA games and store the answers
+    py Collect.py collect [N]        query the LLMs on up to N open games (enabled leagues) and store the answers
     py Collect.py settle             fetch results for finished games from Kalshi
     py Collect.py weights            print each LLM's accuracy and its 0-1 weight
     py Collect.py export [out.xlsx]  dump every prediction + the summary above to Excel
@@ -16,8 +16,9 @@ import sys
 import CostExport
 import CostTracker
 import Export
+import Leagues
 import Tracker
-from Kalshi import NBA_GAME_SERIES, get_all_markets
+from Kalshi import get_all_markets
 from Probability import analyze_market, one_market_per_event
 
 
@@ -25,10 +26,11 @@ def collect(limit: int = 5, db_path: str = Tracker.DEFAULT_DB) -> None:
     conn = Tracker.connect(db_path)
     already = {r[0] for r in conn.execute("SELECT DISTINCT event_ticker FROM predictions")}
 
-    markets = [
-        m for m in one_market_per_event(get_all_markets(market=NBA_GAME_SERIES))
-        if m.get("event_ticker") not in already
+    open_markets = [
+        m for league in Leagues.enabled_leagues()
+        for m in get_all_markets(market=Leagues.get(league).series)
     ]
+    markets = [m for m in one_market_per_event(open_markets) if m.get("event_ticker") not in already]
     for market in markets[:limit]:
         try:
             analyze_market(market, verbose=False, db_conn=conn)

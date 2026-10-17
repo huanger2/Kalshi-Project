@@ -84,6 +84,27 @@ class MarketsPageTests(WebAppTestCase):
         self.assertIn("Denver", r.text)
         self.assertNotIn("Golden State", r.text)
 
+    def test_league_filter_excludes_other_leagues(self):
+        self.record("KXNFLGAME-26OCT25KCSEA-SEA", "Seattle", 0.6, 0.7, game_date="2026-10-25")
+        self.record("KXNHLGAME-26OCT23TBCOL-TB", "Tampa Bay", 0.5, 0.5, game_date="2026-10-23")
+        r = self.client.get("/", params={"league": "NFL"})
+        self.assertIn("Seattle", r.text)
+        self.assertNotIn("Tampa Bay", r.text)
+
+    def test_league_dropdown_lists_every_league(self):
+        r = self.client.get("/")
+        for league in ("NBA", "NFL", "NHL", "MLB"):
+            self.assertIn(f'value="{league}"', r.text)
+
+    def test_a_tie_renders_as_a_tie(self):
+        self.record("KXNFLGAME-26OCT11NYGWAS-WAS", "Washington", 0.5, 0.6, game_date="2026-10-11")
+        conn = Tracker.connect(self.db_path)
+        Tracker.settle(conn, "KXNFLGAME-26OCT11NYGWAS-WAS", False, tie=True)
+        conn.close()
+        self.assertIn(">Tie<", self.client.get("/").text)
+        self.assertIn(">tie<", self.client.get("/ai/OpenAI").text)
+        self.assertIn(">Tie<", self.client.get("/markets/KXNFLGAME-26OCT11NYGWAS-WAS").text)
+
     def test_segment_filter_excludes_other_segments(self):
         self.record("G1", "Denver", 0.6, 0.7, game_date="2026-10-05")   # preseason
         self.record("G2", "Golden State", 0.5, 0.5, game_date="2026-12-25")  # regular

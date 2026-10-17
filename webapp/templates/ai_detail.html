@@ -7,10 +7,18 @@
     <p class="subtitle">
         {{ stats.settled_n }} settled game{{ "" if stats.settled_n == 1 else "s" }},
         {{ stats.pending_n }} pending
+        {% if selected_league %} &middot; {{ selected_league }}{% endif %}
         {% if selected_season %} &middot; {{ selected_season }}{% endif %}
         {% if selected_segment %} &middot; {{ selected_segment }} only{% endif %}
     </p>
     <form class="filters" method="get" action="/ai/{{ stats.llm }}">
+        <label for="league">League</label>
+        <select name="league" id="league" onchange="this.form.season.value = ''; this.form.submit()">
+            <option value="" {% if not selected_league %}selected{% endif %}>All leagues</option>
+            {% for lg in leagues %}
+                <option value="{{ lg }}" {% if lg == selected_league %}selected{% endif %}>{{ lg }}</option>
+            {% endfor %}
+        </select>
         <label for="season">Season</label>
         <select name="season" id="season" onchange="this.form.submit()">
             <option value="" {% if not selected_season %}selected{% endif %}>All seasons</option>
@@ -58,8 +66,13 @@
         </div>
         <div class="stat">
             <span class="label">Called the winner</span>
-            <span class="value">{{ (stats.direction_accuracy * 100) | round | int }}%</span>
-            <span class="sub">market: {{ (stats.market_direction_accuracy * 100) | round | int }}%</span>
+            {% if stats.direction_accuracy is none %}
+                <span class="value">n/a</span>
+                <span class="sub">only ties settled so far</span>
+            {% else %}
+                <span class="value">{{ (stats.direction_accuracy * 100) | round | int }}%</span>
+                <span class="sub">market: {{ (stats.market_direction_accuracy * 100) | round | int }}%</span>
+            {% endif %}
         </div>
         <div class="stat">
             <span class="label">Brier score</span>
@@ -82,7 +95,9 @@
         pick went on to win and a <em>negative</em> one on games it went on to lose -- edge that
         looks the same either way isn't actually predictive, whatever the Brier score says.
         "Called the winner" counts a &gt;50%/&lt;50% pick that matched the outcome, regardless of
-        margin; exactly 50% doesn't count as calling either side. Weight only reflects Brier score
+        margin; exactly 50% doesn't count as calling either side. NFL ties count as no team
+        winning: they're left out of this and the edge averages (a pick for either side was neither
+        right nor wrong) but count toward the Brier score as a 0. Weight only reflects Brier score
         once this AI has 20+ settled games (see Tracker.py) -- until then it defaults to 1.00.
     </p>
     {% endif %}
@@ -97,6 +112,7 @@
         <thead>
             <tr>
                 <th>Date</th>
+                <th>League</th>
                 <th>Matchup</th>
                 <th>Season</th>
                 <th>Model</th>
@@ -111,6 +127,7 @@
             {% for p in predictions %}
             <tr>
                 <td>{{ p.game_date or "?" }}</td>
+                <td class="league-tag">{{ p.league or "?" }}</td>
                 <td><a href="/markets/{{ p.ticker }}">{{ p.team }} vs {{ p.opponent or "?" }}</a></td>
                 <td>{{ p.season_year or "?" }} <span class="pill segment-{{ p.segment }}">{{ p.segment or "?" }}</span></td>
                 <td class="model">{{ p.model or "?" }}</td>
@@ -123,6 +140,8 @@
                 <td>
                     {% if p.outcome is none %}
                         <span class="pill pending">pending</span>
+                    {% elif p.tied %}
+                        <span class="pill neutral">tie</span>
                     {% elif p.outcome == 1 %}
                         <span class="pill won">won</span>
                     {% else %}

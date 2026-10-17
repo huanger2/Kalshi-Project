@@ -9,9 +9,10 @@ to determine whether the market is worth betting on.
 import re
 from typing import Callable, Optional
 
+import Leagues
 import Notifier
 from EVCalculator import EVCalculator, LLMPrediction
-from Kalshi import NBA_GAME_SERIES, get_all_markets, get_prices, implied_yes_prob
+from Kalshi import get_all_markets, get_prices, implied_yes_prob
 
 
 # ---------------------------------------------------------------------------
@@ -36,7 +37,7 @@ def build_prompt(market: dict) -> str:
     """
     Build the LLM prompt for a market.
 
-    NBA game markets come as one market per team and share an event, so the
+    Game markets (every league) come as one market per team and share an event, so the
     title alone ("San Antonio wins") is ambiguous without the rules text that
     names the game; include it whenever Kalshi provides it.
     """
@@ -222,8 +223,12 @@ def one_market_per_event(markets: list[dict]) -> list[dict]:
     return unique
 
 
-def pick_market_by_ticker(ticker: str, series: str = NBA_GAME_SERIES) -> dict:
-    """Fetch all open markets for a series and return the one matching ticker."""
+def pick_market_by_ticker(ticker: str, series: Optional[str] = None) -> dict:
+    """
+    Fetch all open markets for a series and return the one matching ticker.
+    The series defaults to whichever league's the ticker belongs to.
+    """
+    series = series or Leagues.get(Leagues.league_for_ticker(ticker)).series
     markets = get_all_markets(market=series)
     for m in markets:
         if m["ticker"] == ticker:
@@ -231,8 +236,9 @@ def pick_market_by_ticker(ticker: str, series: str = NBA_GAME_SERIES) -> dict:
     raise ValueError(f"Ticker '{ticker}' not found in series '{series}'.")
 
 
-def list_markets(series: str = NBA_GAME_SERIES, limit: int = 20) -> None:
-    """Print open markets for a series so you can pick a ticker."""
+def list_markets(league: str = Leagues.DEFAULT_LEAGUE, limit: int = 20) -> None:
+    """Print a league's open game markets so you can pick a ticker."""
+    series = Leagues.get(league).series
     markets = get_all_markets(market=series)
     print(f"\nOpen markets for series '{series}' ({len(markets)} total, showing first {limit}):\n")
     for m in markets[:limit]:

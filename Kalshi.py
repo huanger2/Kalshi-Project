@@ -7,12 +7,13 @@ from typing import Optional
 import requests
 from dotenv import load_dotenv
 
+import Leagues
+
 BASE = "https://api.elections.kalshi.com/trade-api/v2"
 
-# Kalshi series tickers. KXNBA is the *championship* market; KXNBAGAME is the
-# per-game winner market (one binary market per team in each game).
-NBA_GAME_SERIES = "KXNBAGAME"
-NBA_CHAMPION_SERIES = "KXNBA"
+# Each league's per-game winner series (one binary market per team in each
+# game, e.g. KXNBAGAME) lives in Leagues.py. Not to be confused with the
+# championship series (KXNBA), which isn't tracked.
 
 
 # ---------------------------------------------------------------------------
@@ -213,8 +214,18 @@ def get_market_result(market: dict) -> Optional[bool]:
     return None
 
 
+def is_tie(market: dict) -> bool:
+    """
+    True if a game market settled as a tie (NFL only). Kalshi settles both
+    teams' markets as result "scalar" at $0.50 each (checked against the
+    live API) rather than yes/no; this project treats that as neither team
+    winning -- see Tracker.settle().
+    """
+    return (market.get("result") or "").strip().lower() == "scalar"
+
+
 # ---------------------------------------------------------------------------
-# NBA games by day
+# Games by day
 # ---------------------------------------------------------------------------
 
 _TICKER_DATE = re.compile(r"^[A-Z]+-(\d{2})([A-Z]{3})(\d{2})")
@@ -226,8 +237,10 @@ def game_date(market: dict) -> Optional[datetime.date]:
     """
     The scheduled (US) date of the game, read from the ticker.
 
-    KXNBAGAME-26OCT03MIATOR is the Oct 3, 2026 game. occurrence_datetime is not
-    used because it is UTC, which puts evening games on the following day.
+    KXNBAGAME-26OCT03MIATOR is the Oct 3, 2026 game. MLB tickers also carry
+    the start time, to tell a doubleheader's two games apart
+    (KXMLBGAME-26OCT172000TBCLE), which this ignores. occurrence_datetime is
+    not used because it is UTC, which puts evening games on the following day.
     """
     match = _TICKER_DATE.match(market.get("event_ticker") or market.get("ticker") or "")
     if not match or match.group(2) not in _MONTHS:
@@ -236,21 +249,21 @@ def game_date(market: dict) -> Optional[datetime.date]:
     return datetime.date(2000 + int(yy), _MONTHS[mon], int(dd))
 
 
-def get_nba_games_on(day: datetime.date, status=None) -> list[dict]:
-    """Every KXNBAGAME market (one per team) for games scheduled on `day`."""
+def get_games_on(day: datetime.date, league: str = Leagues.DEFAULT_LEAGUE, status=None) -> list[dict]:
+    """Every per-game market (one per team) for `league`'s games scheduled on `day`."""
     # A game's market closes after the game ends, so nothing from `day` closes
     # before it; the extra day of slack covers time zones. This keeps the
     # query from paging through every past game.
     since = datetime.datetime.combine(day - datetime.timedelta(days=1), datetime.time())
     markets = get_all_markets(
-        market=NBA_GAME_SERIES, status=status, min_close_ts=int(since.timestamp())
+        market=Leagues.get(league).series, status=status, min_close_ts=int(since.timestamp())
     )
     return [m for m in markets if game_date(m) == day]
 
 
-def get_todays_nba_games(today: Optional[datetime.date] = None) -> list[dict]:
-    """Markets for today's NBA games (open, live or already finished)."""
-    return get_nba_games_on(today or datetime.date.today())
+def get_todays_games(league: str = Leagues.DEFAULT_LEAGUE, today: Optional[datetime.date] = None) -> list[dict]:
+    """Markets for `league`'s games today (open, live or already finished)."""
+    return get_games_on(today or datetime.date.today(), league)
 
 
 def get_current_odds(ticker: str) -> dict:
@@ -267,21 +280,31 @@ def get_current_odds(ticker: str) -> dict:
     }
 
 
-def get_nba_results(day: datetime.date) -> list[dict]:
+def get_results(day: datetime.date, league: str = Leagues.DEFAULT_LEAGUE) -> list[dict]:
     """
-    Final results for the games on `day`, one dict per game:
-    event_ticker, winner, loser (team names). Unfinished games are left out.
+    Final results for `league`'s games on `day`, one dict per game:
+    event_ticker, winner, loser (team names) and tie. A tied game (NFL only)
+    has tie=True and no winner/loser. Unfinished games are left out.
     """
     games: dict[str, dict] = {}
-    for market in get_nba_games_on(day):
+    for market in get_games_on(day, league):
         won = get_market_result(market)
-        if won is None:
+        tie = is_tie(market)
+        if won is None and not tie:
             continue
-        game = games.setdefault(market["event_ticker"], {"event_ticker": market["event_ticker"]})
-        game["winner" if won else "loser"] = market.get("yes_sub_title")
-    return [g for g in games.values() if "winner" in g]
+        game = games.setdefault(
+            market["event_ticker"],
+            {"event_ticker": market["event_ticker"], "winner": None, "loser": None, "tie": False},
+        )
+        if tie:
+            game["tie"] = True
+        elif won:
+            game["winner"] = market.get("yes_sub_title")
+        else:
+            game["loser"] = market.get("yes_sub_title")
+    return [g for g in games.values() if g["winner"] or g["tie"]]
 
 
-def get_yesterdays_nba_results(today: Optional[datetime.date] = None) -> list[dict]:
-    """Final results for yesterday's NBA games."""
-    return get_nba_results((today or datetime.date.today()) - datetime.timedelta(days=1))
+def get_yesterdays_results(league: str = Leagues.DEFAULT_LEAGUE, today: Optional[datetime.date] = None) -> list[dict]:
+    """Final results for `league`'s games yesterday."""
+    return get_results((today or datetime.date.today()) - datetime.timedelta(days=1), league)

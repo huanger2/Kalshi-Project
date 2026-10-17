@@ -67,16 +67,18 @@ def markets_page(
     date: Optional[str] = None,
     season: Optional[str] = None,
     segment: Optional[str] = None,
+    league: Optional[str] = None,
     conn: sqlite3.Connection = Depends(get_db),
 ):
-    games = queries.list_games(conn, game_date=date, segment=segment, season_year=season)
-    dates = queries.list_game_dates(conn, segment=segment, season_year=season)
-    seasons = queries.list_season_years(conn)
-    accuracy = queries.accuracy_summary(conn, segment=segment, season_year=season)
+    games = queries.list_games(conn, game_date=date, segment=segment, season_year=season, league=league)
+    dates = queries.list_game_dates(conn, segment=segment, season_year=season, league=league)
+    seasons = queries.list_season_years(conn, league=league)
+    accuracy = queries.accuracy_summary(conn, segment=segment, season_year=season, league=league)
     return templates.TemplateResponse(
         request, "markets.html",
         {
             "games": games, "dates": dates, "selected_date": date, "accuracy": accuracy,
+            "leagues": queries.LEAGUES, "selected_league": league,
             "seasons": seasons, "selected_season": season,
             "segments": queries.SEGMENTS, "selected_segment": segment,
             "ai_names": DEFAULT_LLM_NAMES, "active_tab": "markets",
@@ -101,19 +103,21 @@ def ai_detail_page(
     name: str,
     season: Optional[str] = None,
     segment: Optional[str] = None,
+    league: Optional[str] = None,
     conn: sqlite3.Connection = Depends(get_db),
 ):
     # Case-insensitive so /ai/openai works the same as the canonical /ai/OpenAI.
     matched = next((n for n in DEFAULT_LLM_NAMES if n.lower() == name.lower()), None)
     if matched is None:
         raise HTTPException(status_code=404, detail=f"Unknown AI {name!r}")
-    stats = queries.ai_stats(conn, matched, segment=segment, season_year=season)
-    predictions = queries.ai_predictions(conn, matched, segment=segment, season_year=season)
-    seasons = queries.list_season_years(conn)
+    stats = queries.ai_stats(conn, matched, segment=segment, season_year=season, league=league)
+    predictions = queries.ai_predictions(conn, matched, segment=segment, season_year=season, league=league)
+    seasons = queries.list_season_years(conn, league=league)
     return templates.TemplateResponse(
         request, "ai_detail.html",
         {
             "stats": stats, "predictions": predictions,
+            "leagues": queries.LEAGUES, "selected_league": league,
             "seasons": seasons, "selected_season": season,
             "segments": queries.SEGMENTS, "selected_segment": segment,
             "ai_names": DEFAULT_LLM_NAMES, "active_tab": matched,
@@ -128,9 +132,10 @@ def api_markets(
     date: Optional[str] = None,
     season: Optional[str] = None,
     segment: Optional[str] = None,
+    league: Optional[str] = None,
     conn: sqlite3.Connection = Depends(get_db),
 ) -> list[dict]:
-    return queries.list_games(conn, game_date=date, segment=segment, season_year=season)
+    return queries.list_games(conn, game_date=date, segment=segment, season_year=season, league=league)
 
 
 @app.get("/api/markets/{ticker}")
@@ -143,9 +148,12 @@ def api_market_detail(ticker: str, conn: sqlite3.Connection = Depends(get_db)) -
 
 @app.get("/api/accuracy")
 def api_accuracy(
-    season: Optional[str] = None, segment: Optional[str] = None, conn: sqlite3.Connection = Depends(get_db)
+    season: Optional[str] = None,
+    segment: Optional[str] = None,
+    league: Optional[str] = None,
+    conn: sqlite3.Connection = Depends(get_db),
 ) -> list[dict]:
-    return queries.accuracy_summary(conn, segment=segment, season_year=season)
+    return queries.accuracy_summary(conn, segment=segment, season_year=season, league=league)
 
 
 @app.get("/api/ai/{name}")
@@ -153,12 +161,13 @@ def api_ai_detail(
     name: str,
     season: Optional[str] = None,
     segment: Optional[str] = None,
+    league: Optional[str] = None,
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict:
     matched = next((n for n in DEFAULT_LLM_NAMES if n.lower() == name.lower()), None)
     if matched is None:
         raise HTTPException(status_code=404, detail=f"Unknown AI {name!r}")
     return {
-        "stats": queries.ai_stats(conn, matched, segment=segment, season_year=season),
-        "predictions": queries.ai_predictions(conn, matched, segment=segment, season_year=season),
+        "stats": queries.ai_stats(conn, matched, segment=segment, season_year=season, league=league),
+        "predictions": queries.ai_predictions(conn, matched, segment=segment, season_year=season, league=league),
     }

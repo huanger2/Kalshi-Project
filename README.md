@@ -1,9 +1,9 @@
 # Kalshi-Project
 
-Compares AI predictions against Kalshi's NBA game markets. Each day it logs
-today's games with Kalshi's odds and what OpenAI, Claude and Gemini think, then
-fills in who actually won, building up a record of how the AIs do against the
-market before any real money is bet.
+Compares AI predictions against Kalshi's game markets for the NBA, NFL, NHL
+and MLB. Each day it logs today's games with Kalshi's odds and what OpenAI,
+Claude and Gemini think, then fills in who actually won, building up a record
+of how the AIs do against the market before any real money is bet.
 
 ## Setup
 
@@ -43,6 +43,31 @@ Each AI's model is set in [`ai_settings.json`](ai_settings.json):
 Edits take effect on the next call. A provider left out of the file uses the
 default in [`AISettings.py`](AISettings.py).
 
+## Choosing the leagues
+
+Which leagues get logged each day is set in [`leagues.json`](leagues.json):
+
+```json
+{
+    "enabled": ["NBA", "NFL", "NHL", "MLB"]
+}
+```
+
+Every game costs one call to each AI, so on a busy day four leagues can mean
+40+ games (a full NFL Sunday alone is ~14). Remove a league from the list to
+stop spending on it; its existing data stays in `predictions.db` and the
+webapp. Like `ai_settings.json`, edits take effect on the next run.
+
+All four leagues' Kalshi markets (`KXNBAGAME`, `KXNFLGAME`, `KXNHLGAME`,
+`KXMLBGAME`) have the same shape: one "<Team> wins" market per team per game.
+[`Leagues.py`](Leagues.py) holds each league's series and calendar. The one
+real difference is that **NFL games can end in a tie**, which this project
+treats as no team winning: "Team won?" is 0 and Winner says "Tie" in the
+spreadsheet, and the webapp shows "Tie" rather than a loss. It counts as a 0
+in the Brier score, but doesn't count as a right or wrong pick for either
+side: it's left out of "called the winner %" and the won/lost edge averages.
+(Kalshi itself pays $0.50 per side on a tie; that payout isn't used here.)
+
 ## Daily log
 
 Run once each morning:
@@ -56,19 +81,21 @@ Each run:
 1. **Fills in results.** Games from earlier days that are still waiting on a
    result (yesterday's, plus any day that was missed) get their winner,
    written into the file for the day they were played.
-2. **Logs today's games.** For each game still open on Kalshi, it records the
-   current Kalshi odds and each AI's win probability and confidence.
+2. **Logs today's games** in every league enabled in `leagues.json`. For each
+   game still open on Kalshi, it records the current Kalshi odds and each
+   AI's win probability and confidence.
 
 Each day gets its own spreadsheet in `daily_logs/`, named by date
-(`daily_logs/2026-10-04.xlsx`), with one row per game. Each row is written
-from one team's side: every win % on the row is the chance *that* team wins,
-and "Team won?" is 1 or 0 once the game is over.
+(`daily_logs/2026-10-04.xlsx`), with one row per game across all leagues and
+a League column. Each row is written from one team's side: every win % on
+the row is the chance *that* team wins, and "Team won?" is 1 or 0 once the
+game is over (0 for an NFL tie, with Winner showing "Tie").
 
 Columns are grouped by source under a colored header row:
 
 | Game | Kalshi odds | OpenAI / Claude / Gemini | Result | Details |
 |---|---|---|---|---|
-| date, team, opponent | bid, ask, implied win % | win %, confidence, model | winner, team won?, when recorded | when logged, Kalshi IDs |
+| date, league, team, opponent | bid, ask, implied win % | win %, confidence, model | winner, team won?, when recorded | when logged, Kalshi IDs |
 
 Each AI's `model` column records which model (from `ai_settings.json`)
 actually produced that row's prediction, so a model upgrade doesn't leave
@@ -99,7 +126,9 @@ It runs `py.exe DailyLog.py` with this project folder as the working
 directory, so `AIAPIKEYS.env`, `EmailAlerts.env`, `ai_settings.json`,
 `predictions.db` and `daily_logs/` all resolve exactly as they do when you
 run it by hand. View or edit the task in Task Scheduler (`taskschd.msc`),
-under Task Scheduler Library as `KalshiNBA-DailyLog`.
+under Task Scheduler Library as `KalshiNBA-DailyLog`. The name is left over
+from when the project was NBA-only. It runs every enabled league, and keeping
+the name means an already-registered task carries on without a duplicate.
 
 This only runs while you're logged in, which covers a personal machine
 that's normally on. To also run while logged off: open Task Scheduler, find
@@ -120,12 +149,13 @@ py -m uvicorn webapp.main:app --reload
 Then open <http://127.0.0.1:8000/>. It reads `predictions.db` directly (see
 [`Tracker.py`](Tracker.py)) -- the one table `DailyLog.py` and `Collect.py`
 both write into as they run, so the page is always current with no refresh
-step of its own. It lists tracked games (filterable by date, by
-year-spanning season e.g. "2026-27", and independently by
-preseason/regular season/postseason), a detail page per game showing every
+step of its own. It lists tracked games (filterable by league, by date, by
+season e.g. "2026-27", and independently by preseason/regular
+season/postseason), a detail page per game showing every
 AI's prediction next to Kalshi's price and the "edge" between them, and a
 **tab per AI** (`/ai/{name}`) with its calibration stats and full
-prediction history:
+prediction history (also filterable by league, since an AI can be sharp on
+one sport and poor at another):
 
 - **Average edge when the team won / lost.** A skilled, well-calibrated AI's
   edge (predicted win % minus Kalshi's) should be positive on games its
@@ -177,35 +207,51 @@ season of settled games) to intentionally favor one AI over another.
 
 ### Season and segment
 
-Kalshi doesn't label a `KXNBAGAME` market with any of this (checked
-directly against the live API: no such field exists), so
+Kalshi doesn't label a game market with any of this (checked directly
+against the live API for all four leagues: no such field exists), so
 [`SeasonType.py`](SeasonType.py) derives it instead, purely from the game
-date -- nothing is stored, so a query always reflects the current config,
-never a stale snapshot from whenever a row was inserted. These are two
-independent things, and both the webapp and `Tracker.py` let you filter/scope
-by either one on its own or combine them:
+date and league -- nothing is stored, so a query always reflects the current
+config, never a stale snapshot from whenever a row was inserted. These are
+two independent things, and both the webapp and `Tracker.py` let you
+filter/scope by either one on its own or combine them:
 
-- **Season** -- which year-spanning season a date belongs to, e.g.
-  `"2026-27"` for anything from Oct 2026 through Jun 2027.
+- **Season** -- which season a date belongs to. The NBA and NHL cross New
+  Year's, so they're labeled `"2026-27"` (Oct 2026 - Jun 2027). The NFL is
+  labeled by the year it kicks off (`"2026"` includes the Jan/Feb 2027
+  playoffs and Super Bowl). MLB is one calendar year (`"2026"`).
 - **Segment** -- `"preseason"`, `"regular"`, or `"postseason"`. Preseason
-  games are inherently noisier (limited rotations, no real stakes)
-  regardless of an AI's actual skill, so this matters for reading the
-  accuracy numbers honestly.
+  games (and spring training) are inherently noisier (limited rotations, no
+  real stakes) regardless of an AI's actual skill, so this matters for
+  reading the accuracy numbers honestly.
 
-Segment defaults to a generic calendar heuristic (regular season starts
-~Oct 21, postseason ~Apr 14) that's approximately right for most seasons.
-Fill in [`nba_season.json`](nba_season.json) with a season's actual
-published start dates for exact boundaries:
+Segment defaults to each league's generic calendar heuristic, approximately
+right for most seasons:
+
+| League | Regular season starts | Postseason starts |
+|---|---|---|
+| NBA | ~Oct 21 | ~Apr 14 |
+| NFL | Thursday after Labor Day | 128 days later (Wild Card Saturday) |
+| NHL | ~Oct 7 | ~Apr 18 |
+| MLB | ~Mar 25 | ~Sep 29 |
+
+Fill in the `"seasons"` part of [`leagues.json`](leagues.json) with a
+season's actual published start dates for exact boundaries:
 
 ```json
-{
-    "2026-27": {"regular_season_start": "2026-10-24", "postseason_start": "2027-04-18"}
+"seasons": {
+    "NBA": {"2026-27": {"regular_season_start": "2026-10-20", "postseason_start": "2027-04-14"}},
+    "MLB": {"2026": {"regular_season_start": "2026-03-26", "postseason_start": null}}
 }
 ```
 
-`Tracker.brier_scores()` / `compute_weights()` also take optional `segment`
-and `season_year` arguments to scope the EV-calculation weight itself to
-one slice -- not just the webapp's display.
+`Tracker.brier_scores()` / `compute_weights()` also take optional `segment`,
+`season_year` and `league` arguments to scope the EV-calculation weight
+itself to one slice -- not just the webapp's display.
+
+Rows from before the project tracked multiple leagues get their league
+filled in automatically (from the Kalshi ticker) the first time anything
+opens `predictions.db`. Old `daily_logs/*.xlsx` files without a League
+column read as NBA.
 
 If you have `daily_logs/*.xlsx` files from before `DailyLog.py` started
 writing to `predictions.db` directly, backfill them once:
@@ -295,12 +341,12 @@ day's run catches it up.
 
 | Command | What it does |
 |---|---|
-| `py Collect.py collect [N]` | Ask the AIs about up to N open games and store answers in `predictions.db` |
+| `py Collect.py collect [N]` | Ask the AIs about up to N open games (enabled leagues) and store answers in `predictions.db` |
 | `py Collect.py settle` | Record results for finished games in `predictions.db` |
 | `py Collect.py weights` | Show each AI's accuracy (Brier score) and resulting weight |
 | `py Collect.py export [file.xlsx]` | Export `predictions.db` to Excel |
-| `py scripts.py probability` | Run the full expected-value analysis on one open game |
-| `py scripts.py kalshi` | List open NBA game markets with implied probabilities |
+| `py scripts.py probability [league]` | Run the full expected-value analysis on one open game (default NBA) |
+| `py scripts.py kalshi` | List open game markets in every league with implied probabilities |
 | `py scripts.py ev` | EVCalculator worked example with made-up numbers |
 | `py scripts.py gemini` | Ask Gemini one sample prediction question |
 
@@ -310,7 +356,8 @@ day's run catches it up.
 |---|---|
 | `DailyLog.py` | The daily data-collection run described above |
 | `scripts.py` | Ad-hoc demos for poking at one piece of the pipeline by hand |
-| `Kalshi.py` | Kalshi API: markets, prices, today's games, current odds, results |
+| `Kalshi.py` | Kalshi API: markets, prices, today's games, current odds, results (any league) |
+| `Leagues.py`, `leagues.json` | The tracked leagues: Kalshi series, season calendars, which ones are enabled |
 | `ClaudeAi.py`, `OpenAi.py`, `Gemini.py` | One wrapper per AI API |
 | `AISettings.py`, `ai_settings.json` | Which model each AI uses |
 | `AIWeights.py`, `ai_weights.json` | Each AI's manually adjustable weight for the AI-odds consensus probability |
@@ -318,7 +365,7 @@ day's run catches it up.
 | `EVCalculator.py` | Confidence-weighted expected-value score vs. the market price, and the AI-odds consensus probability |
 | `Tracker.py`, `Export.py`, `Collect.py` | SQLite prediction tracking (the webapp's data source too), accuracy weights, Excel export |
 | `webapp/` | FastAPI app for browsing tracked markets and AI-vs-Kalshi comparisons |
-| `SeasonType.py`, `nba_season.json` | Derives a game date's season year (e.g. "2026-27") and segment (preseason/regular/postseason) |
+| `SeasonType.py` | Derives a game's season (e.g. "2026-27" or "2026") and segment (preseason/regular/postseason) from its date and league |
 | `MigrateDailyLogs.py` | One-time backfill of `daily_logs/*.xlsx` into `predictions.db` |
 | `Notifier.py` | Emails an alert when an AI API call looks like a billing/quota failure |
 | `CostTracker.py`, `CostExport.py`, `model_pricing.json` | Token-based API spend estimate and Excel export |

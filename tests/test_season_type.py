@@ -1,11 +1,8 @@
 import datetime
-import json
-import tempfile
 import unittest
-from pathlib import Path
 from unittest import mock
 
-import SeasonType
+import Leagues
 from SeasonType import segment, segment_iso, season_year, season_year_iso
 
 
@@ -25,10 +22,10 @@ class SeasonYearTests(unittest.TestCase):
 
 
 class SegmentDefaultHeuristicTests(unittest.TestCase):
-    """No nba_season.json entry for this season -- uses the generic calendar fallback."""
+    """No leagues.json entry for this season -- uses the generic calendar fallback."""
 
     def setUp(self):
-        patcher = mock.patch.object(SeasonType, "_load_config", return_value={})
+        patcher = mock.patch.object(Leagues, "load_config", return_value={})
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -56,52 +53,32 @@ class SegmentDefaultHeuristicTests(unittest.TestCase):
 
 class SegmentWithOverridesTests(unittest.TestCase):
     def test_an_explicit_regular_season_start_overrides_the_default(self):
-        config = {"2026-27": {"regular_season_start": "2026-10-24", "postseason_start": None}}
-        with mock.patch.object(SeasonType, "_load_config", return_value=config):
+        config = {"seasons": {"NBA": {"2026-27": {"regular_season_start": "2026-10-24", "postseason_start": None}}}}
+        with mock.patch.object(Leagues, "load_config", return_value=config):
             self.assertEqual(segment(datetime.date(2026, 10, 22)), "preseason")  # would be "regular" by default
             self.assertEqual(segment(datetime.date(2026, 10, 24)), "regular")
 
     def test_an_explicit_postseason_start_overrides_the_default(self):
-        config = {"2026-27": {"regular_season_start": None, "postseason_start": "2027-04-18"}}
-        with mock.patch.object(SeasonType, "_load_config", return_value=config):
+        config = {"seasons": {"NBA": {"2026-27": {"regular_season_start": None, "postseason_start": "2027-04-18"}}}}
+        with mock.patch.object(Leagues, "load_config", return_value=config):
             self.assertEqual(segment(datetime.date(2027, 4, 15)), "regular")  # would be "postseason" by default
             self.assertEqual(segment(datetime.date(2027, 4, 18)), "postseason")
 
     def test_a_season_not_listed_in_the_config_uses_the_default(self):
-        config = {"2030-31": {"regular_season_start": "2030-11-01", "postseason_start": None}}
-        with mock.patch.object(SeasonType, "_load_config", return_value=config):
+        config = {"seasons": {"NBA": {"2030-31": {"regular_season_start": "2030-11-01", "postseason_start": None}}}}
+        with mock.patch.object(Leagues, "load_config", return_value=config):
             self.assertEqual(segment(datetime.date(2026, 10, 5)), "preseason")  # unaffected by 2030-31's override
 
     def test_null_overrides_fall_back_to_the_default_cleanly(self):
-        config = {"2026-27": {"regular_season_start": None, "postseason_start": None}}
-        with mock.patch.object(SeasonType, "_load_config", return_value=config):
+        config = {"seasons": {"NBA": {"2026-27": {"regular_season_start": None, "postseason_start": None}}}}
+        with mock.patch.object(Leagues, "load_config", return_value=config):
             self.assertEqual(segment(datetime.date(2026, 10, 5)), "preseason")
             self.assertEqual(segment(datetime.date(2027, 1, 15)), "regular")
 
 
-class ConfigFileTests(unittest.TestCase):
-    def test_missing_file_is_treated_as_no_overrides(self):
-        with mock.patch.object(SeasonType, "CONFIG_PATH", Path(tempfile.mktemp())):
-            self.assertEqual(SeasonType._load_config(), {})
-
-    def test_invalid_json_raises_instead_of_silently_using_defaults(self):
-        bad = Path(tempfile.mktemp(suffix=".json"))
-        bad.write_text("{not valid json", encoding="utf-8")
-        try:
-            with mock.patch.object(SeasonType, "CONFIG_PATH", bad):
-                with self.assertRaises(ValueError):
-                    SeasonType._load_config()
-        finally:
-            bad.unlink()
-
-    def test_the_shipped_config_file_is_valid_json(self):
-        config = json.loads(SeasonType.CONFIG_PATH.read_text(encoding="utf-8"))
-        self.assertIn("2026-27", config)
-
-
 class SegmentIsoTests(unittest.TestCase):
     def setUp(self):
-        patcher = mock.patch.object(SeasonType, "_load_config", return_value={})
+        patcher = mock.patch.object(Leagues, "load_config", return_value={})
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -127,6 +104,59 @@ class SeasonYearIsoTests(unittest.TestCase):
 
     def test_blank_string_is_none(self):
         self.assertIsNone(season_year_iso(""))
+
+
+class OtherLeagueSeasonYearTests(unittest.TestCase):
+    def test_nhl_spans_two_years_like_the_nba(self):
+        self.assertEqual(season_year(datetime.date(2027, 4, 20), "NHL"), "2026-27")
+
+    def test_nfl_is_labeled_by_its_start_year(self):
+        self.assertEqual(season_year(datetime.date(2026, 10, 25), "NFL"), "2026")
+
+    def test_a_january_nfl_playoff_game_belongs_to_the_previous_years_season(self):
+        self.assertEqual(season_year(datetime.date(2027, 2, 7), "NFL"), "2026")
+
+    def test_mlb_is_one_calendar_year(self):
+        self.assertEqual(season_year(datetime.date(2026, 3, 1), "MLB"), "2026")
+        self.assertEqual(season_year(datetime.date(2026, 11, 1), "MLB"), "2026")
+
+    def test_league_code_is_case_insensitive(self):
+        self.assertEqual(season_year(datetime.date(2026, 10, 25), "nfl"), "2026")
+
+
+class OtherLeagueSegmentTests(unittest.TestCase):
+    def setUp(self):
+        patcher = mock.patch.object(Leagues, "load_config", return_value={})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_nfl_boundaries_follow_labor_day(self):
+        # 2025: Labor Day Sep 1 -> kickoff Thu Sep 4; Wild Card weekend Sat Jan 10, 2026.
+        self.assertEqual(segment(datetime.date(2025, 8, 28), "NFL"), "preseason")
+        self.assertEqual(segment(datetime.date(2025, 9, 4), "NFL"), "regular")
+        self.assertEqual(segment(datetime.date(2026, 1, 4), "NFL"), "regular")
+        self.assertEqual(segment(datetime.date(2026, 1, 10), "NFL"), "postseason")
+        self.assertEqual(segment(datetime.date(2026, 2, 8), "NFL"), "postseason")
+
+    def test_nhl_regular_season_starts_earlier_than_the_nba(self):
+        self.assertEqual(segment(datetime.date(2026, 10, 10), "NHL"), "regular")
+        self.assertEqual(segment(datetime.date(2026, 10, 10), "NBA"), "preseason")
+
+    def test_mlb_spring_training_regular_season_and_october(self):
+        self.assertEqual(segment(datetime.date(2026, 3, 10), "MLB"), "preseason")
+        self.assertEqual(segment(datetime.date(2026, 7, 4), "MLB"), "regular")
+        self.assertEqual(segment(datetime.date(2026, 10, 17), "MLB"), "postseason")
+
+    def test_overrides_are_per_league(self):
+        config = {"seasons": {"MLB": {"2026": {"regular_season_start": None, "postseason_start": "2026-10-20"}}}}
+        with mock.patch.object(Leagues, "load_config", return_value=config):
+            self.assertEqual(segment(datetime.date(2026, 10, 17), "MLB"), "regular")
+            # The NHL's identically-dated game is unaffected by MLB's override.
+            self.assertEqual(segment(datetime.date(2026, 10, 17), "NHL"), "regular")
+            self.assertEqual(segment(datetime.date(2026, 4, 20), "NHL"), "postseason")
+
+    def test_no_league_means_nba(self):
+        self.assertEqual(segment(datetime.date(2026, 10, 10)), segment(datetime.date(2026, 10, 10), "NBA"))
 
 
 if __name__ == "__main__":

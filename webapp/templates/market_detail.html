@@ -6,7 +6,7 @@
 
 <section class="panel">
     <h1>{{ game.team }} vs {{ game.opponent or "?" }}</h1>
-    <p class="subtitle">{{ game.game_date or "date unknown" }} &middot; {{ game.ticker }}</p>
+    <p class="subtitle">{{ game.league or "?" }} &middot; {{ game.game_date or "date unknown" }} &middot; {{ game.ticker }}</p>
 
     <dl class="facts">
         <dt>Kalshi bid / ask</dt>
@@ -25,6 +25,8 @@
         <dd>
             {% if game.outcome is none %}
                 <span class="pill pending">pending</span>
+            {% elif game.tied %}
+                <span class="pill neutral">Tie</span>
             {% elif game.outcome == 1 %}
                 <span class="pill won">{{ game.team }} won</span>
             {% else %}

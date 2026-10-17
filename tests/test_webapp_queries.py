@@ -405,5 +405,63 @@ class AiPredictionsTests(QueriesTestCase):
         self.assertEqual(queries.ai_predictions(self.conn, "NotTracked"), [])
 
 
+NFL = "KXNFLGAME-26OCT25KCSEA-SEA"
+NHL = "KXNHLGAME-26OCT23TBCOL-TB"
+
+
+class LeagueTests(QueriesTestCase):
+    def setUp(self):
+        super().setUp()
+        self.record(NFL, "Seattle", 0.6, [pred("OpenAI", 0.7)], game_date="2026-10-25")
+        self.record(NHL, "Tampa Bay", 0.6, [pred("OpenAI", 0.3)], game_date="2026-10-23")
+
+    def test_list_games_includes_and_filters_by_league(self):
+        self.assertEqual({g["league"] for g in queries.list_games(self.conn)}, {"NFL", "NHL"})
+        self.assertEqual([g["ticker"] for g in queries.list_games(self.conn, league="NFL")], [NFL])
+
+    def test_season_labels_follow_each_leagues_calendar(self):
+        self.assertEqual(queries.list_season_years(self.conn), ["2026-27", "2026"])
+        self.assertEqual(queries.list_season_years(self.conn, league="NFL"), ["2026"])
+
+    def test_dates_are_scoped_to_the_league(self):
+        self.assertEqual(queries.list_game_dates(self.conn, league="NHL"), ["2026-10-23"])
+
+    def test_get_game_includes_the_league(self):
+        self.assertEqual(queries.get_game(self.conn, NHL)["league"], "NHL")
+
+    def test_ai_stats_and_accuracy_scope_to_the_league(self):
+        Tracker.settle(self.conn, NFL, True)   # 0.7 called it
+        Tracker.settle(self.conn, NHL, True)   # 0.3 missed
+        self.assertEqual(queries.ai_stats(self.conn, "OpenAI", league="NFL")["direction_accuracy"], 1.0)
+        self.assertEqual(queries.ai_stats(self.conn, "OpenAI", league="NHL")["direction_accuracy"], 0.0)
+        self.assertEqual([a["settled_n"] for a in queries.accuracy_summary(self.conn, league="NHL")], [1])
+        self.assertEqual({p["league"] for p in queries.ai_predictions(self.conn, "OpenAI")}, {"NFL", "NHL"})
+
+
+class TieTests(QueriesTestCase):
+    def setUp(self):
+        super().setUp()
+        self.record(NFL, "Seattle", 0.6, [pred("OpenAI", 0.7)], game_date="2026-10-25")
+        Tracker.settle(self.conn, NFL, False, tie=True)
+
+    def test_a_tie_is_neither_a_correct_nor_a_wrong_call(self):
+        game = queries.list_games(self.conn)[0]
+        self.assertEqual((game["outcome"], game["tied"]), (0, True))
+        self.assertIsNone(game["market_correct"])
+        self.assertIsNone(game["ai_correct"])
+
+    def test_a_tie_is_left_out_of_direction_accuracy_but_counts_toward_brier(self):
+        stats = queries.ai_stats(self.conn, "OpenAI")
+        self.assertIsNone(stats["direction_accuracy"])
+        self.assertIsNone(stats["market_direction_accuracy"])
+        self.assertAlmostEqual(stats["brier"], 0.49)  # (0.7 - 0)^2: the team didn't win
+        self.assertIsNone(stats["avg_edge_on_win"])
+        self.assertIsNone(stats["avg_edge_on_loss"])  # a tie isn't a loss
+
+    def test_get_game_and_ai_predictions_flag_the_tie(self):
+        self.assertTrue(queries.get_game(self.conn, NFL)["tied"])
+        self.assertTrue(queries.ai_predictions(self.conn, "OpenAI")[0]["tied"])
+
+
 if __name__ == "__main__":
     unittest.main()

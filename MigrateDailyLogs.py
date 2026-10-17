@@ -22,6 +22,7 @@ import sys
 import pandas as pd
 
 import DailyLog
+import Leagues
 import Tracker
 
 LLM_NAMES = ["OpenAI", "Claude", "Gemini"]
@@ -59,6 +60,7 @@ def migrate_file(conn, path: str) -> int:
     for _, row in df.iterrows():
         ticker = row["ticker"]
         outcome = _value(row.get("team_won"))
+        tied = 1 if _value(row.get("winner")) == "Tie" else None
         settled_at = _value(row.get("settled_at")) if outcome is not None else None
 
         for name in LLM_NAMES:
@@ -70,22 +72,24 @@ def migrate_file(conn, path: str) -> int:
                 continue  # that AI failed on this game; nothing to migrate
 
             rows.append((
-                now, ticker, _value(row.get("event_ticker")), f"{row.get('team')} wins",
+                now, ticker, _value(row.get("event_ticker")), Leagues.league_for_ticker(ticker),
+                f"{row.get('team')} wins",
                 _value(row.get("team")), _value(row.get("opponent")), _value(row.get("game_date")),
                 _value(row.get("yes_bid")), _value(row.get("yes_ask")),
                 name, _value(row.get(f"{key}_model")),
                 float(prob), float(_value(row.get(f"{key}_confidence")) or 0.0),
                 float(row["market_prob"]),
                 int(outcome) if outcome is not None else None,
+                tied,
                 settled_at,
             ))
 
     if rows:
         conn.executemany(
             "INSERT INTO predictions "
-            "(created_at, ticker, event_ticker, title, team, opponent, game_date, yes_bid, yes_ask, "
-            " llm, model, predicted_prob, confidence, market_prob, outcome, settled_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "(created_at, ticker, event_ticker, league, title, team, opponent, game_date, yes_bid, yes_ask, "
+            " llm, model, predicted_prob, confidence, market_prob, outcome, tied, settled_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             rows,
         )
         conn.commit()

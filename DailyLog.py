@@ -5,14 +5,16 @@ Run once at the start of the day to collect data before live betting:
 
   1. Fill in the results of earlier games that are still pending (yesterday's,
      plus any day that was missed), in the file for the day they were played.
-  2. Log today's NBA games: Kalshi's current odds and each AI's predicted
-     probability and confidence.
+  2. Log today's games in every league enabled in leagues.json (NBA, NFL,
+     NHL, MLB): Kalshi's current odds and each AI's predicted probability
+     and confidence.
 
 Each day gets its own spreadsheet in daily_logs/, named by date
-(daily_logs/2026-10-04.xlsx), with one row per game. The row is for one team
-(the YES side of the market that was asked about); team_won is 1 if that team
-won, 0 if it lost, blank until the game is settled. Re-running on the same day
-skips games that are already logged.
+(daily_logs/2026-10-04.xlsx), with one row per game across every league. The
+row is for one team (the YES side of the market that was asked about);
+team_won is 1 if that team won, 0 if it lost or tied (NFL only -- no team
+won), blank until the game is settled. Re-running on the same day skips games that
+are already logged.
 
 Each sheet groups its columns by source (Game, Kalshi odds, each AI, Result)
 under a colored header row, and a 'Column guide' sheet explains every column.
@@ -47,9 +49,10 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 import CostExport
+import Leagues
 import Tracker
 from AISettings import get_model
-from Kalshi import get_market, get_nba_results, get_prices, get_todays_nba_games, implied_yes_prob
+from Kalshi import get_market, get_prices, get_results, get_todays_games, implied_yes_prob
 from Probability import build_prompt, default_llms, parse_response, query_llms
 
 DEFAULT_DIR = "daily_logs"
@@ -80,6 +83,8 @@ def column_spec(llm_names: list[str]) -> list[Column]:
     spec = [
         Column("game_date", "Game date", "Game", "Kalshi",
                "Date the game is scheduled (US time)."),
+        Column("league", "League", "Game", "Kalshi",
+               "NBA, NFL, NHL or MLB."),
         Column("team", "Team", "Game", "Kalshi",
                "The team this row is about. Every win % on the row is the chance THIS team wins."),
         Column("opponent", "Opponent", "Game", "Kalshi",
@@ -106,9 +111,11 @@ def column_spec(llm_names: list[str]) -> list[Column]:
         ]
     spec += [
         Column("winner", "Winner", "Result", "Kalshi",
-               "The team that won. Filled in by the first run after the game finishes."),
+               "The team that won, or 'Tie' (NFL only). Filled in by the first run after the "
+               "game finishes."),
         Column("team_won", "Team won? (1 = yes)", "Result", "Kalshi",
-               "1 if Team won, 0 if Team lost, blank until the game is settled.", "0"),
+               "1 if Team won, 0 if Team lost or tied (NFL only -- a tie means no team won, and "
+               "Winner says 'Tie'), blank until the game is settled."),
         Column("settled_at", "Result recorded at", "Result", "This script",
                "When the result was filled in."),
         Column("logged_at", "Logged at", "Details", "This script",
@@ -167,6 +174,14 @@ def load(path: str) -> pd.DataFrame:
     for key in df.columns:
         if _is_numeric(key):
             df[key] = pd.to_numeric(df[key])
+
+    # Files from before the League column existed (all NBA): the ticker says.
+    if "league" not in df.columns:
+        df.insert(min(1, len(df.columns)), "league", None)
+    missing = df["league"].isna()
+    df.loc[missing, "league"] = [
+        Leagues.league_for_ticker(t) or Leagues.DEFAULT_LEAGUE for t in df.loc[missing, "ticker"]
+    ]
     return df
 
 
@@ -233,7 +248,7 @@ def save(df: pd.DataFrame, path: str, llm_names: list[str] = DEFAULT_LLM_NAMES) 
         for r in range(1, ws.max_row + 1):
             ws.cell(r, i).border = divider
 
-    ws.freeze_panes = "D3"  # keep the headers and Game columns visible
+    ws.freeze_panes = "E3"  # keep the headers and Game columns visible
     ws.auto_filter.ref = f"A2:{get_column_letter(len(spec))}{max(ws.max_row, 2)}"
 
     guide = wb.create_sheet("Column guide")
@@ -256,7 +271,7 @@ def save(df: pd.DataFrame, path: str, llm_names: list[str] = DEFAULT_LLM_NAMES) 
 def fill_results(
     df: pd.DataFrame,
     today: datetime.date,
-    fetch_results: Optional[Callable[[datetime.date], list[dict]]] = None,
+    fetch_results: Optional[Callable[[datetime.date, str], list[dict]]] = None,
     db_conn: Optional[sqlite3.Connection] = None,
 ) -> int:
     """
@@ -267,23 +282,27 @@ def fill_results(
     the spreadsheet. A failure there is printed, not raised -- the result
     still belongs in the spreadsheet even if the database write fails.
     """
-    fetch_results = fetch_results or get_nba_results
+    fetch_results = fetch_results or get_results
     pending = df["winner"].isna() & (df["game_date"] < today.isoformat())
     settled = 0
-    for day in sorted(df.loc[pending, "game_date"].unique()):
-        results = {r["event_ticker"]: r for r in fetch_results(datetime.date.fromisoformat(day))}
-        for idx in df.index[pending & (df["game_date"] == day)]:
+    for (day, league), group in df[pending].groupby(["game_date", "league"]):
+        results = {r["event_ticker"]: r for r in fetch_results(datetime.date.fromisoformat(day), league)}
+        for idx in group.index:
             result = results.get(df.at[idx, "event_ticker"])
             if result is None:
                 continue
-            team_won = df.at[idx, "team"] == result["winner"]
-            df.at[idx, "winner"] = result["winner"]
-            df.at[idx, "team_won"] = int(team_won)
+            tie = bool(result.get("tie"))
+            if tie:
+                winner, team_won = "Tie", 0
+            else:
+                winner, team_won = result["winner"], int(df.at[idx, "team"] == result["winner"])
+            df.at[idx, "winner"] = winner
+            df.at[idx, "team_won"] = team_won
             df.at[idx, "settled_at"] = _now()
             settled += 1
             if db_conn is not None:
                 try:
-                    Tracker.settle(db_conn, df.at[idx, "ticker"], team_won)
+                    Tracker.settle(db_conn, df.at[idx, "ticker"], bool(team_won), tie=tie)
                 except Exception as e:
                     print(f"could not settle {df.at[idx, 'ticker']} in predictions.db: {e}")
     return settled
@@ -294,9 +313,12 @@ def todays_rows(
     already_logged: set[str],
     llms: list[tuple[str, Callable[[str], str]]],
     db_conn: Optional[sqlite3.Connection] = None,
+    leagues: Optional[list[str]] = None,
 ) -> list[dict]:
     """
-    One row per game today that isn't logged yet and is still open for trading.
+    One row per game today, in each of `leagues` (default: every league
+    enabled in leagues.json), that isn't logged yet and is still open for
+    trading.
 
     If `db_conn` is given, each game's predictions are also stored in
     predictions.db (see Tracker.record_predictions()) -- the table the
@@ -304,8 +326,9 @@ def todays_rows(
     row is still the thing that matters if the database write fails.
     """
     games: dict[str, list[dict]] = {}
-    for market in get_todays_nba_games(today):
-        games.setdefault(market["event_ticker"], []).append(market)
+    for league in leagues or Leagues.enabled_leagues():
+        for market in get_todays_games(league, today):
+            games.setdefault(market["event_ticker"], []).append(market)
 
     rows = []
     for event, markets in games.items():
@@ -327,6 +350,7 @@ def todays_rows(
         opponent = next((m.get("yes_sub_title") for m in markets[1:]), None)
         row = {
             "game_date": today.isoformat(),
+            "league": Leagues.league_for_ticker(market["ticker"]),
             "event_ticker": event,
             "ticker": market["ticker"],
             "team": market.get("yes_sub_title"),
@@ -342,7 +366,7 @@ def todays_rows(
             row[f"{key}_confidence"] = p.confidence
             row[f"{key}_model"] = get_model(key)
         rows.append(row)
-        print(f"logged {event}: {row['team']} vs {row['opponent']}")
+        print(f"logged {event}: {row['team']} vs {row['opponent']} ({row['league']})")
 
         if db_conn is not None:
             try:
@@ -445,9 +469,11 @@ def run(
     today: Optional[datetime.date] = None,
     llms: Optional[list[tuple[str, Callable[[str], str]]]] = None,
     db_path: str = Tracker.DEFAULT_DB,
+    leagues: Optional[list[str]] = None,
 ) -> tuple[int, int]:
     """
-    Fill in results in earlier days' files, then write today's games to
+    Fill in results in earlier days' files, then write today's games in
+    each of `leagues` (default: every league enabled in leagues.json) to
     today's file. Returns (games settled, games logged).
 
     Every game is also recorded in predictions.db (db_path) as it's logged
@@ -473,7 +499,7 @@ def run(
 
     path = path_for(today, folder)
     df = load(path)
-    new_rows = todays_rows(today, set(df["event_ticker"].dropna()), llms, db_conn=db_conn)
+    new_rows = todays_rows(today, set(df["event_ticker"].dropna()), llms, db_conn=db_conn, leagues=leagues)
     if new_rows:
         new = pd.DataFrame(new_rows)
         df = new if df.empty else pd.concat([df, new], ignore_index=True)

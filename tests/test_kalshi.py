@@ -77,6 +77,11 @@ class ResultTests(unittest.TestCase):
         self.assertIsNone(Kalshi.get_market_result({"result": ""}))
         self.assertIsNone(Kalshi.get_market_result({}))
 
+    def test_a_scalar_settlement_is_a_tie(self):
+        self.assertTrue(Kalshi.is_tie({"result": "scalar", "settlement_value_dollars": "0.5000"}))
+        self.assertFalse(Kalshi.is_tie({"result": "no"}))
+        self.assertFalse(Kalshi.is_tie({}))
+
 
 class PaginationTests(unittest.TestCase):
     def test_get_all_markets_follows_cursors(self):
@@ -170,23 +175,32 @@ class GamesOnDayTests(unittest.TestCase):
 
     def test_keeps_only_that_days_games(self):
         with mock.patch.object(Kalshi, "get_all_markets", return_value=self.MARKETS):
-            games = Kalshi.get_nba_games_on(OCT4)
+            games = Kalshi.get_games_on(OCT4)
         self.assertEqual([m["ticker"] for m in games],
                          ["KXNBAGAME-26OCT04UTADEN-UTA", "KXNBAGAME-26OCT04UTADEN-DEN"])
 
+    def test_queries_the_given_leagues_series(self):
+        with mock.patch.object(Kalshi, "get_all_markets", return_value=[]) as get_all:
+            Kalshi.get_games_on(OCT4, "NHL")
+        self.assertEqual(get_all.call_args.kwargs["market"], "KXNHLGAME")
+
+    def test_reads_the_date_from_an_mlb_ticker_with_a_start_time(self):
+        self.assertEqual(Kalshi.game_date({"event_ticker": "KXMLBGAME-26OCT172000TBCLE"}),
+                         datetime.date(2026, 10, 17))
+
     def test_queries_the_game_series_bounded_by_close_time(self):
         with mock.patch.object(Kalshi, "get_all_markets", return_value=[]) as get_all:
-            Kalshi.get_nba_games_on(OCT4)
+            Kalshi.get_games_on(OCT4)
         kwargs = get_all.call_args.kwargs
-        self.assertEqual(kwargs["market"], Kalshi.NBA_GAME_SERIES)
+        self.assertEqual(kwargs["market"], "KXNBAGAME")
         self.assertIsNone(kwargs["status"])  # finished games today still count
         since = datetime.datetime.fromtimestamp(kwargs["min_close_ts"])
         self.assertLessEqual(since.date(), OCT4)
 
     def test_todays_games_uses_the_given_day(self):
-        with mock.patch.object(Kalshi, "get_nba_games_on", return_value=[]) as on_day:
-            Kalshi.get_todays_nba_games(today=OCT4)
-        on_day.assert_called_once_with(OCT4)
+        with mock.patch.object(Kalshi, "get_games_on", return_value=[]) as on_day:
+            Kalshi.get_todays_games(today=OCT4)
+        on_day.assert_called_once_with(OCT4, "NBA")
 
     def test_min_close_ts_is_sent_to_the_api(self):
         response = mock.Mock(**{"json.return_value": {"markets": []}})
@@ -222,11 +236,22 @@ class ResultsTests(unittest.TestCase):
             game_market("KXNBAGAME-26OCT03BOSNYK-BOS", "Boston", "no"),
             game_market("KXNBAGAME-26OCT03BOSNYK-NYK", "New York", "yes"),
         ]
-        with mock.patch.object(Kalshi, "get_nba_games_on", return_value=markets):
-            results = Kalshi.get_nba_results(OCT3)
+        with mock.patch.object(Kalshi, "get_games_on", return_value=markets):
+            results = Kalshi.get_results(OCT3)
         self.assertEqual(results, [
-            {"event_ticker": "KXNBAGAME-26OCT03MIATOR", "winner": "Miami", "loser": "Toronto"},
-            {"event_ticker": "KXNBAGAME-26OCT03BOSNYK", "winner": "New York", "loser": "Boston"},
+            {"event_ticker": "KXNBAGAME-26OCT03MIATOR", "winner": "Miami", "loser": "Toronto", "tie": False},
+            {"event_ticker": "KXNBAGAME-26OCT03BOSNYK", "winner": "New York", "loser": "Boston", "tie": False},
+        ])
+
+    def test_an_nfl_tie_is_a_result_with_no_winner(self):
+        markets = [
+            game_market("KXNFLGAME-26OCT11NYGWAS-WAS", "Washington", "scalar", settlement_value_dollars="0.5000"),
+            game_market("KXNFLGAME-26OCT11NYGWAS-NYG", "New York G", "scalar", settlement_value_dollars="0.5000"),
+        ]
+        with mock.patch.object(Kalshi, "get_games_on", return_value=markets):
+            results = Kalshi.get_results(OCT3, "NFL")
+        self.assertEqual(results, [
+            {"event_ticker": "KXNFLGAME-26OCT11NYGWAS", "winner": None, "loser": None, "tie": True},
         ])
 
     def test_unfinished_games_are_left_out(self):
@@ -234,18 +259,18 @@ class ResultsTests(unittest.TestCase):
             game_market("KXNBAGAME-26OCT03MIATOR-MIA", "Miami"),
             game_market("KXNBAGAME-26OCT03MIATOR-TOR", "Toronto"),
         ]
-        with mock.patch.object(Kalshi, "get_nba_games_on", return_value=markets):
-            self.assertEqual(Kalshi.get_nba_results(OCT3), [])
+        with mock.patch.object(Kalshi, "get_games_on", return_value=markets):
+            self.assertEqual(Kalshi.get_results(OCT3), [])
 
     def test_yesterday_is_the_day_before_today(self):
-        with mock.patch.object(Kalshi, "get_nba_results", return_value=[]) as results:
-            Kalshi.get_yesterdays_nba_results(today=OCT4)
-        results.assert_called_once_with(OCT3)
+        with mock.patch.object(Kalshi, "get_results", return_value=[]) as results:
+            Kalshi.get_yesterdays_results(today=OCT4)
+        results.assert_called_once_with(OCT3, "NBA")
 
     def test_yesterday_across_a_month_boundary(self):
-        with mock.patch.object(Kalshi, "get_nba_results", return_value=[]) as results:
-            Kalshi.get_yesterdays_nba_results(today=datetime.date(2026, 11, 1))
-        results.assert_called_once_with(datetime.date(2026, 10, 31))
+        with mock.patch.object(Kalshi, "get_results", return_value=[]) as results:
+            Kalshi.get_yesterdays_results(today=datetime.date(2026, 11, 1))
+        results.assert_called_once_with(datetime.date(2026, 10, 31), "NBA")
 
 
 if __name__ == "__main__":

@@ -5,6 +5,13 @@
 <section class="panel">
     <h1>Tracked markets</h1>
     <form class="filters" method="get" action="/">
+        <label for="league">League</label>
+        <select name="league" id="league" onchange="this.form.season.value = ''; this.form.submit()">
+            <option value="" {% if not selected_league %}selected{% endif %}>All leagues</option>
+            {% for lg in leagues %}
+                <option value="{{ lg }}" {% if lg == selected_league %}selected{% endif %}>{{ lg }}</option>
+            {% endfor %}
+        </select>
         <label for="season">Season</label>
         <select name="season" id="season" onchange="this.form.submit()">
             <option value="" {% if not selected_season %}selected{% endif %}>All seasons</option>
@@ -29,12 +36,13 @@
     </form>
 
     {% if not games %}
-        <p class="empty">No markets tracked{% if selected_date %} for {{ selected_date }}{% endif %}{% if selected_season %} in the {{ selected_season }} season{% endif %}{% if selected_segment %} ({{ selected_segment }}){% endif %}{% if not selected_date and not selected_season and not selected_segment %} yet{% endif %}.</p>
+        <p class="empty">No {{ selected_league ~ " " if selected_league }}markets tracked{% if selected_date %} for {{ selected_date }}{% endif %}{% if selected_season %} in the {{ selected_season }} season{% endif %}{% if selected_segment %} ({{ selected_segment }}){% endif %}{% if not selected_date and not selected_season and not selected_segment and not selected_league %} yet{% endif %}.</p>
     {% else %}
     <table class="games">
         <thead>
             <tr>
                 <th>Date</th>
+                <th>League</th>
                 <th>Matchup</th>
                 <th>Season</th>
                 <th>AIs</th>
@@ -47,6 +55,7 @@
             {% for g in games %}
             <tr>
                 <td>{{ g.game_date or "?" }}</td>
+                <td class="league-tag">{{ g.league or "?" }}</td>
                 <td><a href="/markets/{{ g.ticker }}">{{ g.team }} vs {{ g.opponent or "?" }}</a></td>
                 <td>{{ g.season_year or "?" }} <span class="pill segment-{{ g.segment }}">{{ g.segment or "?" }}</span></td>
                 <td>{{ g.ai_count }}</td>
@@ -60,7 +69,7 @@
                     {% if g.outcome is none %}
                         <span class="pill pending">pending</span>
                     {% else %}
-                        {% set result_text = (g.team ~ " won") if g.outcome == 1 else (g.team ~ " lost") %}
+                        {% set result_text = "Tie" if g.tied else ((g.team ~ " won") if g.outcome == 1 else (g.team ~ " lost")) %}
                         {% if g.ai_beat_market == true %}
                             <span class="pill ai-better">{{ result_text }}</span>
                         {% elif g.ai_beat_market == false %}
@@ -78,7 +87,9 @@
         and its accuracy weight (defaults to 1.00 for every AI -- see the accuracy table below),
         not a bare average. Result is colored by whose odds ended up closer to what actually
         happened: green if the AIs' combined odds were closer, red if Kalshi's price was closer,
-        plain if they were equally close.</p>
+        plain if they were equally close. An NFL tie counts as neither team winning, so whichever
+        odds gave the listed team the lower chance were closer; Kalshi and AI odds aren't marked
+        right or wrong on a tie.</p>
     {% endif %}
 </section>
 

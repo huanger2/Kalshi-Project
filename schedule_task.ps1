@@ -62,7 +62,7 @@ $Principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interac
 
 Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger `
     -Settings $Settings -Principal $Principal `
-    -Description "Runs DailyLog.py every morning: settles yesterday's NBA games and logs today's odds/AI predictions." `
+    -Description "Runs DailyLog.py every morning: settles yesterday's games and logs today's odds/AI predictions (every league enabled in leagues.json)." `
     -Force | Out-Null
 
 Write-Host "Scheduled '$TaskName' to run DailyLog.py daily at $Time from $ProjectDir."

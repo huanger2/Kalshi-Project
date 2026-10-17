@@ -20,7 +20,7 @@ from ExcelUtil import write_workbook
 DEFAULT_OUT = "predictions.xlsx"
 
 PREDICTIONS_COLUMNS = [
-    "created_at", "ticker", "event_ticker", "title", "llm",
+    "created_at", "league", "ticker", "event_ticker", "title", "llm",
     "predicted_prob", "confidence", "market_prob",
     "outcome_label", "brier", "market_brier", "settled_at",
 ]
@@ -29,13 +29,14 @@ PREDICTIONS_COLUMNS = [
 def _predictions_frame(conn) -> pd.DataFrame:
     """One row per recorded (market, LLM) prediction, with derived accuracy columns."""
     df = pd.read_sql_query(
-        "SELECT created_at, ticker, event_ticker, title, llm, "
-        "       predicted_prob, confidence, market_prob, outcome, settled_at "
+        "SELECT created_at, league, ticker, event_ticker, title, llm, "
+        "       predicted_prob, confidence, market_prob, outcome, tied, settled_at "
         "FROM predictions ORDER BY ticker, llm",
         conn,
     )
 
     df["outcome_label"] = df["outcome"].map({1: "YES", 0: "NO"}).fillna("PENDING")
+    df.loc[df["tied"] == 1, "outcome_label"] = "TIE"
 
     settled = df["outcome"].notna()
     df["brier"] = pd.NA

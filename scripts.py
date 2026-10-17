@@ -9,21 +9,23 @@ of script-only code.
 (DailyLog.py and Collect.py are the project's real CLI entrypoints and stay
 where they are -- these are just quick manual checks.)
 
-    py scripts.py kalshi        list open NBA game markets with implied probabilities
+    py scripts.py kalshi        list open game markets (every league) with implied probabilities
     py scripts.py ev            EVCalculator worked example with made-up numbers
     py scripts.py gemini        ask Gemini one sample prediction question
-    py scripts.py probability   full EV analysis on one real open Kalshi market
+    py scripts.py probability [league]   full EV analysis on one real open Kalshi market (default NBA)
 """
 
 import sys
 
 
 def kalshi_demo() -> None:
-    """List open NBA game markets with implied probabilities."""
-    from Kalshi import NBA_GAME_SERIES, get_all_markets, implied_yes_prob
+    """List open game markets in every league with implied probabilities."""
+    import Leagues
+    from Kalshi import get_all_markets, implied_yes_prob
 
-    for m in get_all_markets(market=NBA_GAME_SERIES):
-        print(m["ticker"], "|", m["title"], "|", f"{implied_yes_prob(m):.0%}")
+    for league in Leagues.LEAGUES.values():
+        for m in get_all_markets(market=league.series):
+            print(league.code, "|", m["ticker"], "|", m["title"], "|", f"{implied_yes_prob(m):.0%}")
 
 
 def ev_calculator_demo() -> None:
@@ -69,21 +71,23 @@ def gemini_demo() -> None:
     ))
 
 
-def probability_demo() -> None:
+def probability_demo(league: str = "NBA") -> None:
     """Full EV analysis on one real open Kalshi market, using accuracy weights learned so far."""
+    import Leagues
     import Tracker
-    from Kalshi import NBA_GAME_SERIES, get_all_markets
+    from Kalshi import get_all_markets
     from Probability import analyze_market, list_markets, one_market_per_event
 
-    list_markets(series=NBA_GAME_SERIES, limit=10)
+    series = Leagues.get(league).series
+    list_markets(league=league, limit=10)
 
-    markets = one_market_per_event(get_all_markets(market=NBA_GAME_SERIES))
+    markets = one_market_per_event(get_all_markets(market=series))
     if not markets:
-        raise RuntimeError(f"No open {NBA_GAME_SERIES} markets found.")
+        raise RuntimeError(f"No open {series} markets found.")
     market = markets[0]
 
     conn = Tracker.connect()
-    weights = Tracker.compute_weights(conn)
+    weights = Tracker.compute_weights(conn, league=Leagues.get(league).code)
 
     analyze_market(
         market=market,
@@ -106,4 +110,4 @@ if __name__ == "__main__":
     name = sys.argv[1] if len(sys.argv) > 1 else None
     if name not in DEMOS:
         sys.exit(__doc__)
-    DEMOS[name]()
+    DEMOS[name](*sys.argv[2:])
