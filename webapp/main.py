@@ -8,20 +8,24 @@ against Kalshi's price. See webapp/__init__.py for the bigger picture.
     (then open http://127.0.0.1:8000/)
 """
 
+import os
 import sqlite3
+import tempfile
 from pathlib import Path
 from typing import Iterator, Optional
 from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from starlette.background import BackgroundTask
+
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 import Leagues
 import Tracker
 from DailyLog import DEFAULT_LLM_NAMES
-from webapp import auth, queries
+from webapp import auth, daily_run, data_files, queries
 
 HERE = Path(__file__).parent
 
@@ -51,8 +55,9 @@ templates.env.globals["tracked_leagues"] = Leagues.enabled_leagues
 
 # Reachable before choosing to sign in or continue as guest. /api/ stays
 # open too: it's read-only JSON, and Railway's health check polls it.
+# /internal/ is for the cron service, which has its own token instead.
 _OPEN_PATHS = {"/login", "/guest", "/logout"}
-_OPEN_PREFIXES = ("/static/", "/api/")
+_OPEN_PREFIXES = ("/static/", "/api/", "/internal/")
 
 
 @app.middleware("http")
@@ -293,3 +298,101 @@ def api_ai_detail(
         "stats": queries.ai_stats(conn, matched, segment=segment, season_year=season, league=league),
         "predictions": queries.ai_predictions(conn, matched, segment=segment, season_year=season, league=league),
     }
+
+
+# --- Admin data page: move history in, get generated spreadsheets out ---
+
+def _require_admin(request: Request) -> None:
+    if request.state.role != auth.ADMIN:
+        raise HTTPException(status_code=403, detail="Sign in to manage data")
+
+
+def _render_data_page(request: Request, message: Optional[str] = None, error: Optional[str] = None,
+                      status_code: int = 200):
+    return templates.TemplateResponse(
+        request, "admin_data.html",
+        {"files": data_files.listing(), "run": daily_run.status(), "message": message, "error": error,
+         "ai_names": DEFAULT_LLM_NAMES, "active_tab": "data"},
+        status_code=status_code,
+    )
+
+
+@app.get("/admin/data", response_class=HTMLResponse)
+def admin_data_page(request: Request):
+    _require_admin(request)
+    return _render_data_page(request)
+
+
+@app.get("/admin/data/download/predictions.xlsx")
+def download_predictions_export(request: Request):
+    """Every prediction as a spreadsheet (Export.py), built fresh from predictions.db for each download."""
+    _require_admin(request)
+    import Export
+
+    fd, path = tempfile.mkstemp(suffix=".xlsx")
+    os.close(fd)
+    Export.export_to_excel(db_path=data_files.db_path(), out_path=path)
+    return FileResponse(path, filename="predictions.xlsx", background=BackgroundTask(os.remove, path))
+
+
+@app.get("/admin/data/download/{name:path}")
+def download_data_file(request: Request, name: str):
+    _require_admin(request)
+    path = data_files.resolve_download(name)
+    if path is None:
+        raise HTTPException(status_code=404, detail=f"No data file {name!r}")
+    return FileResponse(path, filename=os.path.basename(path))
+
+
+@app.post("/admin/data/predictions-db", response_class=HTMLResponse)
+async def upload_predictions_db(request: Request, file: UploadFile = File(...)):
+    _require_admin(request)
+    if daily_run.status()["state"] == "running":
+        return _render_data_page(request, error="A daily run is writing to the database right now; "
+                                                "try again once it finishes.", status_code=409)
+    try:
+        result = data_files.replace_database(await file.read())
+    except data_files.UploadError as e:
+        return _render_data_page(request, error=str(e), status_code=400)
+    backup = f" The previous database was kept as {result['backup']}." if result["backup"] else ""
+    return _render_data_page(request, message=f"Database replaced: {result['rows']} prediction rows.{backup}")
+
+
+@app.post("/admin/data/daily-logs", response_class=HTMLResponse)
+async def upload_daily_logs(request: Request, files: list[UploadFile] = File(...)):
+    _require_admin(request)
+    result = data_files.add_daily_logs([(f.filename, await f.read()) for f in files])
+    parts = []
+    if result["added"]:
+        parts.append(f"Added {len(result['added'])} day file(s).")
+    if result["skipped"]:
+        parts.append(f"Skipped {', '.join(result['skipped'])}: already on the server.")
+    error = (f"Rejected {', '.join(result['rejected'])}: not a daily log named like 2026-10-04.xlsx."
+             if result["rejected"] else None)
+    return _render_data_page(request, message=" ".join(parts) or None, error=error)
+
+
+# --- For Railway's cron service (trigger_daily_run.py); see webapp/daily_run.py ---
+
+def _require_daily_run_token(request: Request) -> None:
+    if not daily_run.is_configured():
+        raise HTTPException(status_code=503, detail="DAILY_RUN_TOKEN isn't set on this server")
+    if not daily_run.token_ok(request.headers.get("authorization")):
+        raise HTTPException(status_code=401, detail="Bad or missing daily-run token")
+
+
+@app.post("/internal/daily-run", status_code=202)
+def start_daily_run(request: Request):
+    """Kick off DailyLog.run() in the background; 409 if one is already going."""
+    _require_daily_run_token(request)
+    run_id = daily_run.start()
+    if run_id is None:
+        return JSONResponse({"detail": "A daily run is already in progress", **daily_run.status()}, status_code=409)
+    return daily_run.status()
+
+
+@app.get("/internal/daily-run")
+def daily_run_status(request: Request):
+    """How the latest daily run went (the cron service polls this until it finishes)."""
+    _require_daily_run_token(request)
+    return daily_run.status()

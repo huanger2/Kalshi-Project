@@ -14,10 +14,11 @@ import sys
 
 import pandas as pd
 
+import DataDir
 import Tracker
 from ExcelUtil import write_workbook
 
-DEFAULT_OUT = "predictions.xlsx"
+DEFAULT_OUT = DataDir.data_path("predictions.xlsx")
 
 PREDICTIONS_COLUMNS = [
     "created_at", "league", "ticker", "event_ticker", "title", "llm",

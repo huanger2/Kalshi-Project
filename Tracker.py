@@ -27,9 +27,11 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
-# Overridable so a host with an ephemeral filesystem (e.g. Railway) can point
-# it at a mounted volume, e.g. PREDICTIONS_DB=/data/predictions.db.
-DEFAULT_DB = os.environ.get("PREDICTIONS_DB", "predictions.db")
+import DataDir
+
+# Inside DATA_DIR (see DataDir.py) when that's set, e.g. a hosted service's
+# mounted volume; PREDICTIONS_DB overrides just this one path.
+DEFAULT_DB = os.environ.get("PREDICTIONS_DB") or DataDir.data_path("predictions.db")
 COIN_FLIP_BRIER = 0.25
 
 SCHEMA = """
@@ -205,16 +207,21 @@ def settle(conn: sqlite3.Connection, ticker: str, yes_won: bool, tie: bool = Fal
     return cur.rowcount
 
 
-def unsettled_tickers(conn: sqlite3.Connection) -> list[str]:
-    rows = conn.execute(
-        "SELECT DISTINCT ticker FROM predictions WHERE outcome IS NULL ORDER BY ticker"
-    ).fetchall()
+def unsettled_tickers(conn: sqlite3.Connection, before: Optional[str] = None) -> list[str]:
+    """Tickers with no recorded outcome yet; `before` (ISO date) limits it to games played before that day."""
+    sql = "SELECT DISTINCT ticker FROM predictions WHERE outcome IS NULL"
+    params: list = []
+    if before:
+        sql += " AND game_date < ?"
+        params.append(before)
+    rows = conn.execute(sql + " ORDER BY ticker", params).fetchall()
     return [r[0] for r in rows]
 
 
 def settle_from_kalshi(
     conn: sqlite3.Connection,
     fetch_market: Optional[Callable[[str], dict]] = None,
+    before: Optional[str] = None,
 ) -> dict[str, bool]:
     """
     Look up every unsettled ticker on Kalshi and record any results.
@@ -222,6 +229,8 @@ def settle_from_kalshi(
     Args:
         fetch_market: Function ticker -> market dict. Defaults to Kalshi.get_market;
                       injectable so tests don't touch the network.
+        before:       Only games played before this ISO date (skips today's,
+                      which can't have finished yet).
 
     Returns:
         {ticker: yes_won} for the markets that had settled (False for a tie).
@@ -232,7 +241,7 @@ def settle_from_kalshi(
     from Kalshi import get_market_result, is_tie
 
     settled = {}
-    for ticker in unsettled_tickers(conn):
+    for ticker in unsettled_tickers(conn, before=before):
         market = fetch_market(ticker)
         tie = is_tie(market)
         result = False if tie else get_market_result(market)

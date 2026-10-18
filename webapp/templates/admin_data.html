@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Data - AI vs Kalshi{% endblock %}
+{% block content %}
+
+<section class="panel">
+    <h1>Data</h1>
+    <p class="subtitle">
+        Last daily run:
+        {% if run.state == "idle" %}none since this server started
+        {% elif run.state == "running" %}running now
+        {% elif run.state == "done" %}finished &middot; settled {{ run.settled }} game{{ "" if run.settled == 1 else "s" }}, logged {{ run.logged }}
+        {% else %}failed &middot; {{ run.error }}{% endif %}
+    </p>
+
+    {% if message %}<p class="form-message" role="status">{{ message }}</p>{% endif %}
+    {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+
+    <h2>Download</h2>
+    <table class="data-files">
+        <thead>
+            <tr><th>File</th><th>What</th><th>Size</th><th>Updated</th></tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><a href="/admin/data/download/predictions.xlsx">predictions.xlsx</a></td>
+                <td>Every prediction, as a spreadsheet</td>
+                <td colspan="2" class="muted">built fresh when downloaded</td>
+            </tr>
+            {% for f in files %}
+            <tr>
+                <td><a href="/admin/data/download/{{ f.name }}">{{ f.name }}</a></td>
+                <td>{{ f.label }}</td>
+                <td>{{ (f.size / 1024) | round(1) }} KB</td>
+                <td>{{ f.modified | replace("T", " ") }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% if not files %}
+        <p class="empty">Nothing generated on this server yet -- upload your history below, or wait
+            for the first daily run.</p>
+    {% endif %}
+</section>
+
+<section class="panel">
+    <h2>Upload</h2>
+
+    <form class="upload-form" method="post" action="/admin/data/predictions-db" enctype="multipart/form-data">
+        <label for="db-file"><strong>Replace the prediction database</strong></label>
+        <p class="note">Upload a <code>predictions.db</code> (e.g. from the machine that ran the daily log
+            before this server did). The one it replaces is kept on the server as a backup, not deleted.</p>
+        <div class="upload-row">
+            <input id="db-file" name="file" type="file" accept=".db" required>
+            <button type="submit" class="button inline">Replace database</button>
+        </div>
+    </form>
+
+    <form class="upload-form" method="post" action="/admin/data/daily-logs" enctype="multipart/form-data">
+        <label for="log-files"><strong>Add daily log spreadsheets</strong></label>
+        <p class="note">Day files named like <code>2026-10-04.xlsx</code>. Any day already on the server is
+            skipped, since the server's copy may have results filled in since.</p>
+        <div class="upload-row">
+            <input id="log-files" name="files" type="file" accept=".xlsx" multiple required>
+            <button type="submit" class="button inline">Add spreadsheets</button>
+        </div>
+    </form>
+</section>
+
+{% endblock %}

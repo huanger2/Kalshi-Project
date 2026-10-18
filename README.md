@@ -311,10 +311,74 @@ let Railway's builder (Railpack) detect and build the project, and
 [`railway.json`](railway.json) starts the webapp with `python -m webapp`,
 which listens on the `$PORT` Railway provides (8000 when run locally).
 
-The database path comes from the `PREDICTIONS_DB` environment variable
-(default `predictions.db`). A Railway service's filesystem is wiped on every
-deploy, so for data that persists, attach a volume and set e.g.
-`PREDICTIONS_DB=/data/predictions.db`.
+#### Where data lives: `DATA_DIR`
+
+Everything generated -- `predictions.db`, `daily_logs/`, `api_costs.xlsx`,
+`predictions.xlsx` -- goes in the working directory by default, as on a
+personal machine. Set `DATA_DIR` (e.g. `/data`, a mounted volume) to put it
+all there instead: a Railway service's own filesystem is wiped on every
+deploy, a volume isn't. (`PREDICTIONS_DB` still overrides just the
+database's path.)
+
+With `DATA_DIR` set, the league tracking switches save to
+`league_tracking.json` on the volume instead of editing `leagues.json`, so
+a flipped switch survives deploys while season dates you edit in
+`leagues.json` and push still take effect. Until a switch is first flipped,
+`leagues.json`'s `"enabled"` list decides.
+
+#### The daily run on Railway
+
+A Railway volume attaches to exactly one service, so the daily run happens
+inside the **web service** (which owns the volume), and a small **cron
+service** just triggers it: [`trigger_daily_run.py`](trigger_daily_run.py)
+calls `POST /internal/daily-run` with a shared secret, waits for the run to
+finish, and exits 0 or 1, so the cron service's logs show each morning's
+outcome. Meanwhile, the run's full output goes to the web service's logs.
+
+Each run also settles any earlier game still pending in `predictions.db`
+straight from Kalshi, even without its day's spreadsheet on the server.
+
+#### One-time setup
+
+**Web service** (the one already running the site):
+
+1. Attach a volume to it, mounted at `/data`.
+2. In its **Variables**, set:
+   - `DATA_DIR=/data`
+   - `USERNAME` and `PASSWORD` (the admin login)
+   - `DAILY_RUN_TOKEN`: a long random secret, e.g. from
+     `py -c "import secrets; print(secrets.token_urlsafe(32))"`
+   - your `AIAPIKEYS.env` and `EmailAlerts.env` contents (Raw Editor accepts
+     them as-is)
+3. Sign in, open **Data** (top right), and upload your `predictions.db`,
+   plus any recent `daily_logs/*.xlsx` you want on the server.
+
+**Cron service:**
+
+1. Add a new service from the same GitHub repo.
+2. In its **Settings**, set the start command to
+   `python trigger_daily_run.py` and the cron schedule to `0 14 * * *`.
+   Cron schedules are in UTC: that's 9am US Central during daylight saving
+   time, 8am in winter.
+3. In its **Variables**, set `DAILY_RUN_URL` to the site's URL (e.g.
+   `https://your-app.up.railway.app`) and `DAILY_RUN_TOKEN` to the same
+   secret as the web service's.
+
+To test it without waiting for 14:00 UTC, run the trigger from your own
+machine. It runs the real daily job on the server, AI calls included:
+
+```powershell
+$env:DAILY_RUN_URL = "https://your-app.up.railway.app"; $env:DAILY_RUN_TOKEN = "<the secret>"
+py trigger_daily_run.py
+```
+
+Once a Railway run has succeeded, remove the Windows task
+(`.\schedule_task.ps1 -Uninstall`), so the two don't both pay for every
+AI call each morning, into two diverging databases.
+
+The **Data** page (admin only) also lists everything the daily run
+generates for download, plus a `predictions.xlsx` of every prediction,
+built fresh when downloaded.
 
 ## Email alerts when an AI runs out of funds
 
@@ -418,7 +482,9 @@ day's run catches it up.
 | `Notifier.py` | Emails an alert when an AI API call looks like a billing/quota failure |
 | `CostTracker.py`, `CostExport.py`, `model_pricing.json` | Token-based API spend estimate and Excel export |
 | `ExcelUtil.py` | Shared workbook-writing helper used by `Export.py` and `CostExport.py` |
-| `schedule_task.ps1` | Registers the Windows Task Scheduler task that runs `DailyLog.py` daily |
+| `schedule_task.ps1` | Registers the Windows Task Scheduler task that runs `DailyLog.py` daily (when not hosted) |
+| `trigger_daily_run.py` | Railway cron service's start command: asks the web service to do the daily run |
+| `DataDir.py` | Where generated data lives (`DATA_DIR`, e.g. a Railway volume) |
 
 ## Tests
 

@@ -14,10 +14,11 @@ import sys
 import pandas as pd
 
 import CostTracker
+import DataDir
 import Tracker
 from ExcelUtil import write_workbook
 
-DEFAULT_OUT = "api_costs.xlsx"
+DEFAULT_OUT = DataDir.data_path("api_costs.xlsx")
 
 USAGE_COLUMNS = ["created_at", "provider", "model", "input_tokens", "output_tokens", "cost_usd", "context"]
 

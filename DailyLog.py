@@ -49,13 +49,14 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 import CostExport
+import DataDir
 import Leagues
 import Tracker
 from AISettings import get_model
 from Kalshi import get_market, get_prices, get_results, get_todays_games, implied_yes_prob
 from Probability import build_prompt, default_llms, parse_response, query_llms
 
-DEFAULT_DIR = "daily_logs"
+DEFAULT_DIR = DataDir.data_path("daily_logs")
 DEFAULT_LLM_NAMES = ["OpenAI", "Claude", "Gemini"]
 
 
@@ -496,6 +497,15 @@ def run(
         if n:
             save(df, path, llm_names)
             settled += n
+
+    # Backstop: settle predictions.db rows whose day file isn't in `folder`
+    # -- e.g. games logged on another machine before this one took over the
+    # daily run -- straight from Kalshi, so they never sit pending forever.
+    # Best-effort, like the spreadsheet-side settling above.
+    try:
+        settled += len(Tracker.settle_from_kalshi(db_conn, fetch_market=get_market, before=today.isoformat()))
+    except Exception as e:
+        print(f"could not settle remaining games from Kalshi: {e}")
 
     path = path_for(today, folder)
     df = load(path)

@@ -55,6 +55,15 @@ class DailyLogTestCase(unittest.TestCase):
         # predictions.db as a side effect of running the test suite.
         self.db_path = os.path.join(tmp.name, "predictions.db")
 
+        # run()'s Kalshi backstop settles leftover predictions.db rows with
+        # get_market; keep it offline. Unsettled unless a test says otherwise.
+        self.kalshi_markets = {}
+        patcher = mock.patch.object(
+            DailyLog, "get_market", side_effect=lambda t: self.kalshi_markets.get(t, {"ticker": t, "result": ""})
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def sheet(self, day):
         return DailyLog.load(DailyLog.path_for(day, self.folder))
 
@@ -547,6 +556,37 @@ class MultiLeagueTests(DailyLogTestCase):
         os.makedirs(self.folder)
         old.to_excel(self.path, index=False)
         self.assertEqual(DailyLog.load(self.path).iloc[0]["league"], "NBA")
+
+
+class KalshiBackstopTests(DailyLogTestCase):
+    def test_a_db_only_game_from_an_earlier_day_is_settled_from_kalshi(self):
+        conn = Tracker.connect(self.db_path)
+        conn.execute("INSERT INTO predictions (created_at, ticker, game_date, llm, predicted_prob, confidence, market_prob) "
+                     "VALUES ('x', 'KXNBAGAME-26OCT02BOSNYK-BOS', '2026-10-02', 'OpenAI', 0.6, 0.8, 0.5)")
+        conn.commit()
+        conn.close()
+        self.kalshi_markets["KXNBAGAME-26OCT02BOSNYK-BOS"] = {"result": "yes"}
+
+        self.run_day(OCT4, [])
+
+        conn = Tracker.connect(self.db_path)
+        self.addCleanup(conn.close)
+        self.assertEqual(conn.execute("SELECT outcome FROM predictions").fetchone()[0], 1)
+        self.assertEqual(self.counts, (1, 0))
+
+    def test_todays_games_are_not_looked_up(self):
+        self.run_day(OCT4, TODAY_MARKETS)
+        DailyLog.get_market.assert_not_called()
+
+    def test_a_kalshi_outage_does_not_fail_the_run(self):
+        conn = Tracker.connect(self.db_path)
+        conn.execute("INSERT INTO predictions (created_at, ticker, game_date, llm, predicted_prob, confidence, market_prob) "
+                     "VALUES ('x', 'KXNBAGAME-26OCT02BOSNYK-BOS', '2026-10-02', 'OpenAI', 0.6, 0.8, 0.5)")
+        conn.commit()
+        conn.close()
+        DailyLog.get_market.side_effect = ConnectionError("Kalshi down")
+        self.run_day(OCT4, TODAY_MARKETS)
+        self.assertEqual(self.counts, (0, 2))
 
 
 class CostExportIntegrationTests(DailyLogTestCase):

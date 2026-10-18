@@ -30,7 +30,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
+import DataDir
+
 CONFIG_PATH = Path(__file__).with_name("leagues.json")
+STATE_NAME = "league_tracking.json"
 
 # Rows recorded before this project tracked more than one league -- and any
 # ticker that matches no league's series (test fixtures use made-up ones) --
@@ -116,29 +119,56 @@ def load_config() -> dict:
         raise ValueError(f"{CONFIG_PATH.name} is not valid JSON: {e}") from e
 
 
+def state_path() -> Optional[Path]:
+    """
+    Where the tracking switches save their state when DATA_DIR is set (a
+    hosted deploy, see DataDir.py): a small file on the persistent volume,
+    since leagues.json itself is part of the deployed code and is replaced
+    by every deploy. None when DATA_DIR isn't set -- then the switches edit
+    leagues.json directly, as on a personal machine.
+    """
+    if not DataDir.data_dir():
+        return None
+    return Path(DataDir.data_path(STATE_NAME))
+
+
 def enabled_leagues() -> list[str]:
     """
-    The leagues to log each day, from leagues.json's "enabled" list (every
-    league if the file or the key is missing). An unknown code raises
-    rather than being skipped, so a typo doesn't silently stop a league
-    from being tracked.
+    The leagues to log each day: the switches' saved state if there is one
+    (see state_path()), else leagues.json's "enabled" list, else every
+    league. An unknown code raises rather than being skipped, so a typo
+    doesn't silently stop a league from being tracked.
     """
-    codes = load_config().get("enabled")
+    state = state_path()
+    source, codes = CONFIG_PATH.name, None
+    if state is not None and state.exists():
+        source, codes = state.name, json.loads(state.read_text(encoding="utf-8")).get("enabled")
+    if codes is None:
+        codes = load_config().get("enabled")
     if codes is None:
         return list(LEAGUES)
     unknown = [c for c in codes if c.upper() not in LEAGUES]
     if unknown:
-        raise ValueError(f"{CONFIG_PATH.name} lists unknown league(s) {unknown}; known: {list(LEAGUES)}")
+        raise ValueError(f"{source} lists unknown league(s) {unknown}; known: {list(LEAGUES)}")
     return [c.upper() for c in codes]
+
+
+def _write_atomically(path: Path, text: str) -> None:
+    # Write-then-rename, so a run reading the file mid-write never sees half of it.
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(path)
 
 
 def set_enabled(code: str, enabled: bool) -> list[str]:
     """
     Turn daily tracking for one league on or off (the webapp's per-league
-    switch) by rewriting leagues.json's "enabled" list, kept in LEAGUES
-    order. Only that one line of the file changes, so hand-written
-    formatting and season dates are left exactly as they were. Returns the
-    new list.
+    switch), keeping the list in LEAGUES order. Returns the new list.
+
+    Hosted (DATA_DIR set), this saves to state_path() on the volume. Locally
+    it rewrites leagues.json's "enabled" list -- only that one line of the
+    file changes, so hand-written formatting and season dates are left
+    exactly as they were.
 
     Turning a league off only stops DailyLog.py/Collect.py from querying it
     from the next run on; its already-logged games stay in predictions.db.
@@ -151,6 +181,11 @@ def set_enabled(code: str, enabled: bool) -> list[str]:
         tracked.discard(code)
     new_list = [c for c in LEAGUES if c in tracked]
 
+    state = state_path()
+    if state is not None:
+        _write_atomically(state, json.dumps({"enabled": new_list}) + "\n")
+        return new_list
+
     try:
         text = CONFIG_PATH.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -161,11 +196,7 @@ def set_enabled(code: str, enabled: bool) -> list[str]:
         config["enabled"] = new_list
         text = json.dumps(config, indent=4) + "\n"
     json.loads(text)  # never write out a file that no longer parses
-
-    # Write-then-rename, so a run reading the file mid-write never sees half of it.
-    tmp = CONFIG_PATH.with_name(CONFIG_PATH.name + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    tmp.replace(CONFIG_PATH)
+    _write_atomically(CONFIG_PATH, text)
     return new_list
 
 

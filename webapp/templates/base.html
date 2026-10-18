@@ -13,6 +13,7 @@
         {% if request.state.role %}
         <div class="account">
             {% if request.state.role == "admin" %}
+                <a href="/admin/data" class="{% if active_tab == 'data' %}active{% endif %}">Data</a>
                 <span>Signed in</span>
                 <form method="post" action="/logout"><button type="submit" class="link-button">Sign out</button></form>
             {% else %}
