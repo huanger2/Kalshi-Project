@@ -360,3 +360,54 @@ class AdminDataPageTests(WebAppHostingTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StorageProblemTests(unittest.TestCase):
+    def test_a_writable_folder_is_fine(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(DataDir.problem(os.path.join(d, "predictions.db")))
+
+    def test_a_missing_folder_says_to_attach_a_volume(self):
+        with mock.patch.dict("os.environ", {"DATA_DIR": "/no/such/volume"}):
+            message = DataDir.problem("/no/such/volume/predictions.db")
+        self.assertIn("doesn't exist", message)
+        self.assertIn("attach a volume", message)
+
+    def test_an_unwritable_folder_says_to_run_as_root(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch("os.access", return_value=False):
+            message = DataDir.problem(os.path.join(d, "predictions.db"))
+        self.assertIn("RAILWAY_RUN_UID=0", message)
+
+
+class DatabaseUnavailablePageTests(unittest.TestCase):
+    """What Railway showed as a bare 500 traceback on every page: DATA_DIR pointing at no volume."""
+
+    def setUp(self):
+        missing = os.path.join(tempfile.gettempdir(), "no-volume-here", "predictions.db")
+
+        def override_get_db():
+            conn = Tracker.connect(missing)
+            try:
+                yield conn
+            finally:
+                conn.close()
+
+        app.dependency_overrides[get_db] = override_get_db
+        self.addCleanup(app.dependency_overrides.pop, get_db, None)
+        for patcher in (mock.patch.object(Tracker, "DEFAULT_DB", missing),
+                        mock.patch.dict("os.environ", {"DATA_DIR": os.path.dirname(missing)})):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.client = TestClient(app, raise_server_exceptions=False)
+        self.client.cookies.set("kalshi_session", "guest")
+
+    def test_pages_explain_the_fix_instead_of_crashing(self):
+        r = self.client.get("/")
+        self.assertEqual(r.status_code, 503)
+        self.assertIn("Database unavailable", r.text)
+        self.assertIn("attach a volume", r.text)
+
+    def test_the_api_and_health_check_answer_in_json(self):
+        r = self.client.get("/api/accuracy")
+        self.assertEqual(r.status_code, 503)
+        self.assertIn("attach a volume", r.json()["detail"])

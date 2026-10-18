@@ -8,9 +8,12 @@ against Kalshi's price. See webapp/__init__.py for the bigger picture.
     (then open http://127.0.0.1:8000/)
 """
 
+import html
 import os
 import sqlite3
+import sys
 import tempfile
+import traceback
 from pathlib import Path
 from typing import Iterator, Optional
 from urllib.parse import quote
@@ -18,7 +21,7 @@ from urllib.parse import quote
 from starlette.background import BackgroundTask
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -32,6 +35,34 @@ HERE = Path(__file__).parent
 app = FastAPI(title="AI vs Kalshi")
 app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
 templates = Jinja2Templates(directory=str(HERE / "templates"))
+
+
+def _storage_problem() -> Optional[str]:
+    import DataDir
+    return DataDir.problem(Tracker.DEFAULT_DB)
+
+
+# Say so at startup, in terms of what to fix, rather than leaving only
+# SQLite's bare "unable to open database file" on every request.
+if _storage_problem():
+    print(f"ERROR: the prediction database can't be opened. {_storage_problem()}", file=sys.stderr, flush=True)
+
+
+@app.exception_handler(sqlite3.OperationalError)
+async def database_unavailable(request: Request, exc: sqlite3.OperationalError):
+    problem = _storage_problem()
+    if problem is None:  # some other database error: a plain 500, with the traceback in the logs
+        traceback.print_exception(exc)
+        return PlainTextResponse("Internal Server Error", status_code=500)
+    message = f"The prediction database can't be opened. {problem}"
+    if request.url.path.startswith("/api/"):
+        return JSONResponse({"detail": message}, status_code=503)
+    return HTMLResponse(
+        "<!doctype html><meta charset='utf-8'><title>Database unavailable - AI vs Kalshi</title>"
+        "<body style='font-family: system-ui, sans-serif; max-width: 40rem; margin: 3rem auto; padding: 0 1rem'>"
+        f"<h1>Database unavailable</h1><p>{html.escape(message)}</p></body>",
+        status_code=503,
+    )
 
 _STYLE_CSS = HERE / "static" / "style.css"
 
