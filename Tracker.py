@@ -58,6 +58,28 @@ CREATE TABLE IF NOT EXISTS predictions (
 );
 CREATE INDEX IF NOT EXISTS idx_predictions_ticker ON predictions (ticker);
 CREATE INDEX IF NOT EXISTS idx_predictions_event ON predictions (event_ticker);
+
+-- Bets placed by Betting.py's rules. A bet's result isn't stored: it follows
+-- from the predictions rows' outcome/tied for the same ticker (Betting.result()).
+CREATE TABLE IF NOT EXISTS bets (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at     TEXT    NOT NULL,
+    mode           TEXT    NOT NULL,  -- "paper": recorded only, nothing sent to Kalshi
+    ticker         TEXT    NOT NULL,
+    event_ticker   TEXT,
+    league         TEXT,
+    game_date      TEXT,
+    team           TEXT,              -- the market's YES team
+    opponent       TEXT,
+    side           TEXT    NOT NULL,  -- "yes" backs `team`, "no" backs `opponent`
+    price          REAL    NOT NULL,  -- per contract, 0-1: that side's ask when the bet was placed
+    count          INTEGER NOT NULL,  -- contracts
+    cost           REAL    NOT NULL,  -- price * count, USD
+    fee            REAL    NOT NULL,  -- Kalshi's trading fee, USD
+    ai_prob        REAL    NOT NULL,  -- the AIs' consensus YES probability
+    edge           REAL    NOT NULL   -- the bet side's AI probability minus price
+);
+CREATE INDEX IF NOT EXISTS idx_bets_ticker ON bets (ticker);
 """
 
 # Columns added after the table first shipped. CREATE TABLE IF NOT EXISTS

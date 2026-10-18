@@ -48,6 +48,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
+import Betting
 import CostExport
 import DataDir
 import Leagues
@@ -378,6 +379,12 @@ def todays_rows(
                 )
             except Exception as e:
                 print(f"could not record {event} in predictions.db: {e}")
+            # Paper bets (betting.json) -- best-effort too: a betting problem
+            # mustn't cost the game its spreadsheet row or its predictions.
+            try:
+                Betting.consider(db_conn, market, predictions, prices, today.isoformat(), opponent=opponent)
+            except Exception as e:
+                print(f"could not consider a bet on {event}: {e}")
     return rows
 
 

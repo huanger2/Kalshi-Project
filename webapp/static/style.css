@@ -146,6 +146,14 @@ body {
 .sources ul { margin: 0.4rem 0 0; padding-left: 1.2rem; }
 .sources a { color: var(--accent); }
 .form-error ul { margin: 0.35rem 0 0; padding-left: 1.2rem; }
+.settings-label { font-size: 0.88rem; font-weight: 600; }
+.settings-select { padding: 0.4rem 0.55rem; border: 1px solid var(--border); border-radius: 6px; font: inherit; font-size: 0.88rem; background: var(--panel); color: var(--text); max-width: 100%; }
+.checkbox-row { display: flex; gap: 1rem; flex-wrap: wrap; }
+.checkbox-row .checkbox { display: inline-flex; gap: 0.35rem; align-items: center; font-size: 0.88rem; }
+.table-heading { font-size: 0.9rem; margin: 1.1rem 0 0.25rem; color: var(--muted); }
+.table-heading:first-of-type { margin-top: 0; }
+.current-row td { background: #f3f6fe; font-weight: 600; }
+.table-scroll { overflow-x: auto; }
 @media (max-width: 560px) {
     .settings-grid { grid-template-columns: 1fr; }
     .settings-table { display: block; overflow-x: auto; }

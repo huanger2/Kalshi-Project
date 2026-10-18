@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% block title %}Betting - AI vs Kalshi{% endblock %}
+
+{% macro money(x) -%}
+    {%- if x is none -%}&mdash;{%- else -%}{{ "-" if x < 0 }}${{ "%.2f" | format(x | abs) }}{%- endif -%}
+{%- endmacro %}
+{% macro signed(x) -%}
+    {%- if x is none -%}<span class="muted">&mdash;</span>
+    {%- else -%}<span class="{{ 'edge-up' if x > 0 else 'edge-down' if x < 0 }}">{{ "+" if x > 0 }}{{ money(x) }}</span>{%- endif -%}
+{%- endmacro %}
+{% macro pct(x, digits=1) -%}
+    {%- if x is none -%}&mdash;{%- else -%}{{ ("%." ~ digits ~ "f") | format(x * 100) }}%{%- endif -%}
+{%- endmacro %}
+
+{% block content %}
+{% set c = b.config %}
+{% set s = b.summary %}
+
+<section class="panel">
+    <div class="panel-head">
+        <h1>Betting</h1>
+        <span class="pill {{ 'won' if c.mode == 'paper' else 'pending' }}">
+            {{ "Paper betting" if c.mode == "paper" else "Off" }}</span>
+    </div>
+    <p class="subtitle">
+        {% if c.mode == "paper" %}Each daily run records a paper bet on every game where the AI odds beat the
+            price by {{ "%g" | format(c.min_edge * 100) }} points or more. Nothing is sent to Kalshi.
+        {% else %}Betting is off: the daily run logs games without recording bets.{% endif %}
+    </p>
+    <div class="stats-grid">
+        <div class="stat"><span class="label">Bets</span><span class="value">{{ s.bets }}</span>
+            <span class="sub">{{ s.pending }} pending</span></div>
+        <div class="stat"><span class="label">Staked</span><span class="value">{{ money(s.staked) }}</span>
+            <span class="sub">incl. {{ money(s.fees) }} fees</span></div>
+        <div class="stat"><span class="label">Profit / loss</span>
+            <span class="value {{ 'edge-up' if s.pnl > 0 else 'edge-down' if s.pnl < 0 }}">{{ "+" if s.pnl > 0 }}{{ money(s.pnl) }}</span>
+            <span class="sub">settled bets</span></div>
+        <div class="stat"><span class="label">ROI</span><span class="value">{{ pct(s.roi) }}</span>
+            <span class="sub">P&amp;L / settled stake</span></div>
+        <div class="stat"><span class="label">Win rate</span><span class="value">{{ pct(s.win_rate, 0) }}</span>
+            <span class="sub">{{ s.won }} won, {{ s.lost }} lost</span></div>
+    </div>
+</section>
+
+<section class="panel" id="rules">
+    <h2>Rules</h2>
+    <p class="subtitle">Edge is the AI odds for a side minus what one contract on that side costs (its ask), in
+        points. Each game's better side is bet if its edge clears the minimum. Changes apply from the next daily run.</p>
+    {% if message %}<p class="form-message" role="status">{{ message }}</p>{% endif %}
+    {% for e in errors %}{% if loop.first %}<div class="form-error" role="alert">Nothing was saved:<ul>{% endif %}
+        <li>{{ e }}</li>{% if loop.last %}</ul></div>{% endif %}{% endfor %}
+    <p class="note">
+        {% if b.hosted and b.file.override %}
+            Saved on this server, overriding the deployed <code>{{ b.file.name }}</code>.
+            <button type="submit" form="reset-rules" class="link-button">Reset to repo version</button>
+        {% elif b.hosted %}Using the deployed <code>{{ b.file.name }}</code>. Saving keeps your changes on this server.
+        {% else %}Saves to <code>{{ b.file.name }}</code> in the project folder.{% endif %}
+    </p>
+    {% if b.hosted and b.file.override %}<form id="reset-rules" method="post" action="/betting/rules/reset"></form>{% endif %}
+
+    <form class="settings-form" method="post" action="/betting/rules">
+        <div class="settings-grid">
+            <label for="mode">Mode</label>
+            <select id="mode" name="mode" class="settings-select">
+                {% for m in b.modes %}
+                <option value="{{ m }}" {% if m == c.mode %}selected{% endif %}>{{ "Paper (record bets, send nothing)" if m == "paper" else "Off" }}</option>
+                {% endfor %}
+            </select>
+            <label for="min_edge">Minimum edge (points)</label>
+            <input id="min_edge" name="min_edge" type="number" step="0.5" min="0" max="50" value="{{ '%g' | format(c.min_edge * 100) }}" required>
+            <label for="stake_usd">Dollars per bet</label>
+            <input id="stake_usd" name="stake_usd" type="number" step="0.01" min="0.01" value="{{ '%g' | format(c.stake_usd) }}" required>
+            <label for="max_daily_usd">Daily cap ($, incl. fees)</label>
+            <input id="max_daily_usd" name="max_daily_usd" type="number" step="0.01" min="0" value="{{ '%g' | format(c.max_daily_usd) }}" required>
+            <label for="min_price">Lowest price (cents)</label>
+            <input id="min_price" name="min_price" type="number" step="1" min="0" max="99" value="{{ '%g' | format(c.min_price * 100) }}" required>
+            <label for="max_price">Highest price (cents)</label>
+            <input id="max_price" name="max_price" type="number" step="1" min="0" max="99" value="{{ '%g' | format(c.max_price * 100) }}" required>
+            <label for="min_ais">AIs that must answer</label>
+            <input id="min_ais" name="min_ais" type="number" step="1" min="1" max="10" value="{{ c.min_ais }}" required>
+            <span class="settings-label">Leagues</span>
+            <div class="checkbox-row">
+                {% for code in b.leagues %}
+                <label class="checkbox"><input type="checkbox" name="leagues" value="{{ code }}" {% if code in c.leagues %}checked{% endif %}> {{ code }}</label>
+                {% endfor %}
+            </div>
+        </div>
+        <button type="submit" class="button inline primary">Save rules</button>
+    </form>
+</section>
+
+<section class="panel" id="backtest">
+    <h2>What if?</h2>
+    <p class="subtitle">These rules replayed over all {{ b.settled_games }} settled game{{ "" if b.settled_games == 1 else "s" }}
+        logged so far, at the prices when each was logged, for different minimum edges. The daily cap is left out.</p>
+    {% if not b.settled_games %}
+        <p class="empty">No settled games yet.</p>
+    {% else %}
+    <table class="settings-table">
+        <thead><tr><th>Min edge</th><th>Bets</th><th>Win rate</th><th>Staked</th><th>P&amp;L</th><th>ROI</th></tr></thead>
+        <tbody>
+            {% for r in b.backtest %}
+            <tr{% if r.current %} class="current-row"{% endif %}>
+                <td>{{ pct(r.min_edge, 0) }}{% if r.current %} <span class="pill neutral">current</span>{% endif %}</td>
+                <td>{{ r.bets }}</td>
+                <td>{{ pct(r.win_rate, 0) }}</td>
+                <td>{{ money(r.staked) }}</td>
+                <td>{{ signed(r.pnl if r.bets else none) }}</td>
+                <td>{{ pct(r.roi) }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <p class="note">A small sample swings a lot: treat a threshold that looks good over a few dozen games as a hint,
+        not a result.</p>
+    {% endif %}
+</section>
+
+{% if s.bets %}
+<section class="panel" id="breakdowns">
+    <h2>Breakdowns</h2>
+    {% for g in b.breakdowns %}
+    <h3 class="table-heading">{{ g.title }}</h3>
+    <table class="settings-table">
+        <thead><tr><th></th><th>Bets</th><th>Pending</th><th>Win rate</th><th>Staked</th><th>P&amp;L</th><th>ROI</th></tr></thead>
+        <tbody>
+            {% for r in g.rows %}
+            <tr>
+                <td>{{ r.label }}</td><td>{{ r.bets }}</td><td>{{ r.pending }}</td><td>{{ pct(r.win_rate, 0) }}</td>
+                <td>{{ money(r.staked) }}</td><td>{{ signed(r.pnl if r.settled else none) }}</td><td>{{ pct(r.roi) }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endfor %}
+</section>
+{% endif %}
+
+<section class="panel" id="bets">
+    <h2>Bets</h2>
+    {% if not s.bets %}
+        <p class="empty">No bets yet{% if c.mode == "paper" %} -- the next daily run records them{% endif %}.</p>
+    {% else %}
+    <div class="table-scroll">
+    <table>
+        <thead><tr><th>Date</th><th>Game</th><th>Backing</th><th>Price</th><th>AI odds</th><th>Edge</th>
+            <th>Cost</th><th>Result</th><th>P&amp;L</th></tr></thead>
+        <tbody>
+            {% for bet in b.bets %}
+            <tr>
+                <td>{{ bet.game_date }}</td>
+                <td><span class="league-tag">{{ bet.league }}</span>
+                    <a href="/markets/{{ bet.ticker }}">{{ bet.team }} vs {{ bet.opponent or "?" }}</a></td>
+                <td>{{ bet.backing or "?" }} <span class="muted">({{ bet.side | upper }})</span></td>
+                <td>{{ bet.count }} &times; {{ "%.0f" | format(bet.price * 100) }}&cent;</td>
+                <td>{{ pct(bet.ai_prob if bet.side == "yes" else 1 - bet.ai_prob, 0) }}</td>
+                <td>{{ "+" if bet.edge > 0 }}{{ pct(bet.edge) }}</td>
+                <td>{{ money(bet.cost + bet.fee) }}</td>
+                <td><span class="pill {{ {'won': 'won', 'lost': 'lost', 'tie': 'neutral'}.get(bet.status, 'pending') }}">{{ bet.status | capitalize }}</span></td>
+                <td>{{ signed(bet.pnl) }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% if b.bet_total > b.bets | length %}<p class="note">Showing the latest {{ b.bets | length }} of {{ b.bet_total }} bets.</p>{% endif %}
+    {% endif %}
+</section>
+
+{% endblock %}

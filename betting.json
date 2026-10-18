@@ -1,0 +1,11 @@
+{
+    "_comment": "Automatic betting rules (the Betting tab edits this). 'mode': 'off' or 'paper' (bets are recorded, nothing is sent to Kalshi). A game gets a bet when the AI odds beat the ask on one side by at least 'min_edge' (0.05 = 5 points); each bet buys as many contracts as 'stake_usd' covers, and bets stop for the day once 'max_daily_usd' (cost + fees) is used up. Only sides priced between 'min_price' and 'max_price', with at least 'min_ais' AIs answering, in 'leagues', are bet on.",
+    "mode": "paper",
+    "min_edge": 0.05,
+    "stake_usd": 5.0,
+    "max_daily_usd": 50.0,
+    "min_price": 0.1,
+    "max_price": 0.9,
+    "min_ais": 2,
+    "leagues": ["NBA", "NFL", "NHL", "MLB"]
+}

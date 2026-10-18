@@ -302,6 +302,43 @@ answer from memory. If it still answers a part without searching, the page
 flags that part as unverified. One click takes about two minutes and makes
 four Gemini calls, logged in API spend; Google bills web search separately.
 
+### Betting tab (paper betting)
+
+Signed in as admin, the **Betting** tab sets the rules for automatic bets
+(`betting.json`, see [`Betting.py`](Betting.py)) and shows how they've done.
+**Only paper betting exists so far: bets are recorded, and nothing is sent
+to Kalshi.**
+
+Each time the daily run logs a game, it compares the AI odds (the same
+weighted consensus as the "AI odds" column) with what a contract costs right
+now on each side, which is the ask, not the midpoint:
+
+    edge(YES) = AI odds - yes_ask           (backing the listed team)
+    edge(NO)  = (1 - AI odds) - no_ask      (backing its opponent)
+
+The side with the bigger edge gets a bet if all of these hold:
+
+- the edge is at least the minimum
+- the side is priced within the allowed range
+- enough AIs answered
+- the league is ticked
+- the day's cap isn't used up
+
+A bet buys as many whole contracts as the dollars-per-bet amount covers.
+Its cost includes Kalshi's trading fee, 7% of C × P × (1 − P) rounded up to
+the cent. A bet's result and P&L come from its game's outcome, which the
+daily run already settles. A tied NFL game pays $0.50 a contract.
+
+Besides totals and the bet list, the tab shows:
+
+- **What if?** replays the current rules over every settled game logged so
+  far, at the prices when each was logged, for a range of minimum edges, so
+  you can see which threshold would have paid. The daily cap is left out.
+- **Breakdowns** split your bets' results by league, side and edge.
+
+Saving the rules works like the Settings tab: locally it edits
+`betting.json`, and hosted it saves a copy on the volume.
+
 ### Signing in
 
 The first page a visitor sees is a sign-in screen: sign in, or **Continue
@@ -502,6 +539,7 @@ day's run catches it up.
 | `ClaudeAi.py`, `OpenAi.py`, `Gemini.py` | One wrapper per AI API |
 | `AISettings.py`, `ai_settings.json` | Which model each AI uses |
 | `AIWeights.py`, `ai_weights.json` | Each AI's manually adjustable weight for the AI-odds consensus probability |
+| `Betting.py`, `betting.json` | Paper betting rules: which games get a bet, its size and Kalshi fee, and its result |
 | `Probability.py` | Builds the prompt, parses AI replies, runs the EV analysis |
 | `EVCalculator.py` | Confidence-weighted expected-value score vs. the market price, and the AI-odds consensus probability |
 | `Tracker.py`, `Export.py`, `Collect.py` | SQLite prediction tracking (the webapp's data source too), accuracy weights, Excel export |
