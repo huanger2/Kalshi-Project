@@ -11,6 +11,7 @@ against Kalshi's price. See webapp/__init__.py for the bigger picture.
 import sqlite3
 from pathlib import Path
 from typing import Iterator, Optional
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -20,7 +21,7 @@ from fastapi.templating import Jinja2Templates
 import Leagues
 import Tracker
 from DailyLog import DEFAULT_LLM_NAMES
-from webapp import queries
+from webapp import auth, queries
 
 HERE = Path(__file__).parent
 
@@ -47,6 +48,77 @@ templates.env.globals["static_version"] = _static_version
 # fresh each render, so a flipped switch shows up without a restart.
 templates.env.globals["league_codes"] = queries.LEAGUES
 templates.env.globals["tracked_leagues"] = Leagues.enabled_leagues
+
+# Reachable before choosing to sign in or continue as guest. /api/ stays
+# open too: it's read-only JSON, and Railway's health check polls it.
+_OPEN_PATHS = {"/login", "/guest", "/logout"}
+_OPEN_PREFIXES = ("/static/", "/api/")
+
+
+@app.middleware("http")
+async def require_sign_in_or_guest(request: Request, call_next):
+    """
+    Records who's viewing (request.state.role: "admin", "guest" or None) for
+    routes and templates, and sends a first-time visitor's page request to
+    the login page, which remembers where they were headed.
+    """
+    request.state.role = auth.role(request)
+    path = request.url.path
+    is_open = path in _OPEN_PATHS or path.startswith(_OPEN_PREFIXES)
+    if request.state.role is None and not is_open and request.method == "GET":
+        target = path + (f"?{request.url.query}" if request.url.query else "")
+        return RedirectResponse(f"/login?next={quote(target, safe='')}", status_code=303)
+    return await call_next(request)
+
+
+def _set_session(response: RedirectResponse, request: Request, value: str, max_age: Optional[int]) -> None:
+    # Secure whenever the site is reached over HTTPS -- Railway terminates TLS
+    # at its proxy, so the app itself sees plain HTTP plus this header.
+    https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+    response.set_cookie(auth.COOKIE, value, max_age=max_age, httponly=True, samesite="lax", secure=https)
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page(request: Request, next: Optional[str] = None):
+    if request.state.role == auth.ADMIN:
+        return RedirectResponse(auth.safe_next(next), status_code=303)
+    return templates.TemplateResponse(
+        request, "login.html", {"next": auth.safe_next(next), "error": None, "username": ""}
+    )
+
+
+@app.post("/login", response_class=HTMLResponse)
+def login(
+    request: Request,
+    username: str = Form(""),
+    password: str = Form(""),
+    next: str = Form("/"),
+):
+    if not auth.credentials_match(username, password):
+        error = ("Incorrect username or password." if auth.is_configured()
+                 else "Signing in isn't set up on this server yet. You can still continue as a guest.")
+        return templates.TemplateResponse(
+            request, "login.html",
+            {"next": auth.safe_next(next), "error": error, "username": username},
+            status_code=401,
+        )
+    response = RedirectResponse(auth.safe_next(next), status_code=303)
+    _set_session(response, request, auth.admin_cookie(), auth.MAX_AGE)
+    return response
+
+
+@app.post("/guest")
+def continue_as_guest(request: Request, next: str = Form("/")):
+    response = RedirectResponse(auth.safe_next(next), status_code=303)
+    _set_session(response, request, auth.GUEST, None)  # a browser-session cookie
+    return response
+
+
+@app.post("/logout")
+def logout():
+    response = RedirectResponse("/login", status_code=303)
+    response.delete_cookie(auth.COOKIE)
+    return response
 
 
 def get_db() -> Iterator[sqlite3.Connection]:
@@ -122,12 +194,15 @@ def league_markets_page(
 
 
 @app.post("/league/{code}/tracking")
-def set_league_tracking(code: str, enabled: str = Form(...)):
+def set_league_tracking(request: Request, code: str, enabled: str = Form(...)):
     """
     The league tab's tracking switch: adds/removes the league from
     leagues.json's "enabled" list, which DailyLog.py reads on its next run.
     A plain form POST + redirect back, so it works without any JavaScript.
+    Admins only -- guests never see the switch, and can't post to it either.
     """
+    if request.state.role != auth.ADMIN:
+        raise HTTPException(status_code=403, detail="Sign in to change which leagues are tracked")
     league = _league_or_404(code)
     Leagues.set_enabled(league, enabled == "1")
     return RedirectResponse(f"/league/{league}", status_code=303)

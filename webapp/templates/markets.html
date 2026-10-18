@@ -5,8 +5,8 @@
 <section class="panel">
     <div class="panel-head">
         <h1>{{ selected_league ~ " markets" if selected_league else "All tracked markets" }}</h1>
-        {% if selected_league %}
-            {% set on = selected_league in tracked_leagues() %}
+        {% set on = selected_league in tracked_leagues() %}
+        {% if selected_league and request.state.role == "admin" %}
             <form method="post" action="/league/{{ selected_league }}/tracking">
                 <input type="hidden" name="enabled" value="{{ '0' if on else '1' }}">
                 <button type="submit" class="switch" role="switch" aria-checked="{{ 'true' if on else 'false' }}"

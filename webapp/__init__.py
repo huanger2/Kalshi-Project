@@ -8,7 +8,7 @@ DailyLog.py and Collect.py both write into.
 
     py -m uvicorn webapp.main:app --reload
 
-This is a first framework pass, not a finished product: no auth, no
-pagination, server-rendered HTML with a couple of JSON endpoints alongside
+This is a first framework pass, not a finished product: a single admin login
+(see auth.py), no pagination, server-rendered HTML with a couple of JSON endpoints alongside
 for whatever comes next (a JS frontend, a mobile client).
 """

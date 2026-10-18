@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import tempfile
 import unittest
@@ -7,9 +8,12 @@ from unittest import mock
 
 from fastapi.testclient import TestClient
 
+import time
+
 import Leagues
 import Tracker
 from EVCalculator import LLMPrediction
+from webapp import auth
 from webapp.main import app, get_db
 
 
@@ -60,7 +64,23 @@ class WebAppTestCase(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
+        # The admin login is read from the environment; pin it for every test.
+        env = mock.patch.dict("os.environ", {"USERNAME": "admin", "PASSWORD": "s3cret"})
+        env.start()
+        self.addCleanup(env.stop)
+        env_secret = mock.patch.dict("os.environ")
+        env_secret.start()
+        self.addCleanup(env_secret.stop)
+        os.environ.pop("SESSION_SECRET", None)
+
+        # Every page past the login screen needs a choice made; browse as a
+        # guest unless a test signs in.
         self.client = TestClient(app)
+        self.client.post("/guest")
+
+    def sign_in(self, username="admin", password="s3cret"):
+        return self.client.post("/login", data={"username": username, "password": password, "next": "/"},
+                                follow_redirects=False)
 
     def _remove_db(self):
         import os
@@ -160,9 +180,102 @@ class MarketsPageTests(WebAppTestCase):
         self.assertNotIn("Boston", r.text)
 
 
+class LoginTests(WebAppTestCase):
+    def setUp(self):
+        super().setUp()
+        self.client = TestClient(app)  # a fresh visitor: no guest/admin choice made yet
+
+    def test_a_first_visit_goes_to_the_login_page_and_remembers_where_it_was_headed(self):
+        r = self.client.get("/league/NFL?season=2026", follow_redirects=False)
+        self.assertEqual(r.status_code, 303)
+        self.assertEqual(r.headers["location"], "/login?next=%2Fleague%2FNFL%3Fseason%3D2026")
+        page = self.client.get(r.headers["location"]).text
+        self.assertIn("Continue as guest", page)
+        self.assertIn('value="/league/NFL?season=2026"', page)
+
+    def test_the_login_page_has_no_nav_before_a_choice_is_made(self):
+        self.assertNotIn('href="/league/NBA"', self.client.get("/login").text)
+
+    def test_continuing_as_a_guest_goes_where_the_visitor_was_headed(self):
+        r = self.client.post("/guest", data={"next": "/league/NHL"}, follow_redirects=False)
+        self.assertEqual(r.headers["location"], "/league/NHL")
+        self.assertEqual(self.client.get("/league/NHL").status_code, 200)
+
+    def test_correct_credentials_sign_in(self):
+        r = self.sign_in()
+        self.assertEqual(r.status_code, 303)
+        self.assertIn("Sign out", self.client.get("/").text)
+
+    def test_wrong_credentials_are_rejected(self):
+        for username, password in (("admin", "nope"), ("someone", "s3cret"), ("", "")):
+            r = self.sign_in(username, password)
+            self.assertEqual(r.status_code, 401)
+            self.assertIn("Incorrect username or password", r.text)
+        self.assertEqual(self.client.get("/", follow_redirects=False).status_code, 303)  # still not in
+
+    def test_nobody_can_sign_in_when_the_login_isnt_configured(self):
+        with mock.patch.dict("os.environ"):
+            os.environ.pop("PASSWORD")
+            r = self.sign_in("admin", "")
+        self.assertEqual(r.status_code, 401)
+        self.assertIn("isn&#39;t set up", r.text)
+
+    def test_a_forged_admin_cookie_is_not_trusted(self):
+        self.client.cookies.set(auth.COOKIE, "admin.9999999999.deadbeef")
+        self.assertEqual(self.client.get("/", follow_redirects=False).status_code, 303)
+
+    def test_changing_the_password_signs_the_admin_out(self):
+        self.sign_in()
+        with mock.patch.dict("os.environ", {"PASSWORD": "rotated"}):
+            self.assertEqual(self.client.get("/", follow_redirects=False).status_code, 303)
+
+    def test_an_expired_sign_in_is_not_trusted(self):
+        self.client.cookies.set(auth.COOKIE, auth.admin_cookie(now=time.time() - auth.MAX_AGE - 60))
+        self.assertEqual(self.client.get("/", follow_redirects=False).status_code, 303)
+
+    def test_signing_out_returns_to_the_login_page(self):
+        self.sign_in()
+        r = self.client.post("/logout", follow_redirects=False)
+        self.assertEqual(r.headers["location"], "/login")
+        self.assertEqual(self.client.get("/", follow_redirects=False).status_code, 303)
+
+    def test_next_never_redirects_off_site(self):
+        for target in ("//evil.example", "https://evil.example", "/\evil.example"):
+            r = self.client.post("/guest", data={"next": target}, follow_redirects=False)
+            self.assertEqual(r.headers["location"], "/", target)
+
+    def test_the_json_api_and_static_files_stay_open(self):
+        self.assertEqual(self.client.get("/api/accuracy").status_code, 200)
+        self.assertEqual(self.client.get("/static/style.css").status_code, 200)
+
+
+class GuestSwitchTests(WebAppTestCase):
+    """The default WebAppTestCase visitor is a guest."""
+
+    def test_a_guest_does_not_see_the_tracking_switch(self):
+        r = self.client.get("/league/NFL")
+        self.assertEqual(r.status_code, 200)
+        self.assertNotIn('role="switch"', r.text)
+        self.assertNotIn("/tracking", r.text)
+
+    def test_a_guest_cannot_post_to_the_switch(self):
+        before = self.config_path.read_text(encoding="utf-8")
+        r = self.client.post("/league/NFL/tracking", data={"enabled": "0"})
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(self.config_path.read_text(encoding="utf-8"), before)
+
+    def test_a_visitor_with_no_session_cannot_post_to_the_switch(self):
+        r = TestClient(app).post("/league/NFL/tracking", data={"enabled": "0"})
+        self.assertEqual(r.status_code, 403)
+
+    def test_a_guest_sees_a_sign_in_link(self):
+        self.assertIn(">Sign in</a>", self.client.get("/").text)
+
+
 class LeagueTabTests(WebAppTestCase):
     def setUp(self):
         super().setUp()
+        self.sign_in()  # the tracking switch is admin-only
         self.record("KXNFLGAME-26OCT25KCSEA-SEA", "Seattle", 0.6, 0.7, game_date="2026-10-25")
         self.record("KXNHLGAME-26OCT23TBCOL-TB", "Tampa Bay", 0.5, 0.5, game_date="2026-10-23")
 

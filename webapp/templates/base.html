@@ -10,7 +10,19 @@
     <header class="site-header">
         <a class="brand" href="/">AI vs Kalshi</a>
         <span class="tagline">NBA, NFL, NHL &amp; MLB prediction markets, compared</span>
+        {% if request.state.role %}
+        <div class="account">
+            {% if request.state.role == "admin" %}
+                <span>Signed in</span>
+                <form method="post" action="/logout"><button type="submit" class="link-button">Sign out</button></form>
+            {% else %}
+                <span>Guest</span>
+                <a href="/login?next={{ request.url.path | urlencode }}">Sign in</a>
+            {% endif %}
+        </div>
+        {% endif %}
     </header>
+    {% if request.state.role %}
     <nav class="tabs">
         {% set tracked = tracked_leagues() %}
         <a href="/" class="{% if active_tab == 'markets' %}active{% endif %}">All markets</a>
@@ -24,6 +36,7 @@
             <a href="/ai/{{ name }}" class="{% if active_tab == name %}active{% endif %}">{{ name }}</a>
         {% endfor %}
     </nav>
+    {% endif %}
     <main>
         {% block content %}{% endblock %}
     </main>

@@ -269,9 +269,40 @@ Safe to re-run -- it only inserts rows for a (ticker, AI) pair it hasn't
 seen before, so running it again after a new day's file appears just adds
 that day.
 
-This is a first framework pass, not a finished product: no auth, no
-pagination, plain server-rendered pages. Treat it as the foundation to
+This is a first framework pass, not a finished product: one admin login,
+no pagination, plain server-rendered pages. Treat it as the foundation to
 build the "look at different markets" experience on, not the end state.
+
+### Signing in
+
+The first page a visitor sees is a sign-in screen: sign in, or **Continue
+as guest** to browse everything read-only. Only a signed-in admin sees and
+can use the league tracking switches; a guest who posts to one anyway gets
+a 403. The JSON `/api/` endpoints stay open (read-only, and Railway's
+health check uses one).
+
+There's a single admin login, read from two environment variables:
+
+| Variable | |
+|---|---|
+| `USERNAME` | the admin username |
+| `PASSWORD` | the admin password |
+| `SESSION_SECRET` | optional: signs the login cookie. Defaults to a key derived from `PASSWORD`, so changing the password signs everyone out |
+
+With either unset, nobody can sign in (guests still can). A sign-in lasts
+30 days.
+
+**Windows already sets `USERNAME`** to your Windows account name, so locally
+it isn't free to choose. To sign in to a local copy, set both in the shell
+you start the server from (this only affects that window):
+
+```powershell
+$env:USERNAME = "your-admin-name"; $env:PASSWORD = "your-password"
+py -m webapp
+```
+
+On Railway, set them in the service's **Variables** tab. A Linux container
+doesn't predefine `USERNAME`.
 
 ### Hosting on Railway
 
