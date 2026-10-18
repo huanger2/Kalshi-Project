@@ -1,10 +1,8 @@
 {
-    "_comment": "USD per 1,000,000 tokens, matching how providers publish prices. Fill these in from each provider's pricing page for the exact models set in ai_settings.json. A model left out (or null) records its token counts with an unknown cost instead of silently assuming $0.",
+    "_comment": "USD per 1,000,000 tokens, from each provider's pricing page. A model left out (or null) records its calls with an unknown cost rather than $0. Each call's cost is saved when it's made, so removing an old model here doesn't change past costs. Also editable on the Settings tab.",
     "models": {
-        "claude-sonnet-5-5": {"input_per_million": 3.00, "output_per_million": 15.00},
-        "gpt-4.1-mini": {"input_per_million": 0.15, "output_per_million": 0.60},
-        "gpt-5.1": {"input_per_million": 1.25, "output_per_million": 10.00},
-        "gemini-3.1-flash-lite": {"input_per_million": 0.25, "output_per_million": 1.50},
-        "gemini-3.8-flash": {"input_per_million": 0.75, "output_per_million": 3.75}
+        "claude-sonnet-5-5": {"input_per_million": 3.0, "output_per_million": 15.0},
+        "gemini-3.8-flash": {"input_per_million": 0.75, "output_per_million": 3.75},
+        "gpt-5.1": {"input_per_million": 1.25, "output_per_million": 10.0}
     }
 }

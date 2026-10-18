@@ -1,7 +1,8 @@
 {
+    "_comment": "Each AI's weight in the 'AI odds' consensus: 1.0 each is equal weighting, 0 leaves an AI out. Also editable on the Settings tab.",
     "weights": {
-        "claude": 1.0,
         "openai": 1.0,
+        "claude": 1.0,
         "gemini": 1.0
     }
 }

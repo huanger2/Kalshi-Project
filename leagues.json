@@ -1,10 +1,18 @@
 {
-    "_comment": "Which leagues DailyLog.py logs each day ('enabled' -- remove one to stop spending AI calls on it), and each league's season boundaries, keyed by season ('2026-27' for NBA/NHL, which cross New Year's; '2026' for NFL/MLB). SeasonType.py falls back to a generic calendar heuristic (see Leagues.py) for any season/boundary left null here -- fill in the league's actual published dates once announced for exact classification.",
+    "_comment": "'enabled': the leagues the daily run logs (the league tabs' switches edit this). 'seasons': each season's start dates, keyed '2026-27' for NBA/NHL and '2026' for NFL/MLB; null uses the default in Leagues.py. Also editable on the Settings tab.",
     "enabled": ["NBA", "NFL"],
     "seasons": {
-        "NBA": {"2026-27": {"regular_season_start": "2026-10-20", "postseason_start": "2027-04-13"}},
-        "NFL": {"2026": {"regular_season_start": "2026-09-10", "postseason_start": "2027-01-16"}},
-        "NHL": {"2026-27": {"regular_season_start": "2026-10-7", "postseason_start": "2027-04-19"}},
-        "MLB": {"2026": {"regular_season_start": "2026-03-26", "postseason_start": "2026-09-29"}}
+        "NBA": {
+            "2026-27": {"regular_season_start": "2026-10-20", "postseason_start": "2027-04-13"}
+        },
+        "NFL": {
+            "2026": {"regular_season_start": "2026-09-10", "postseason_start": "2027-01-16"}
+        },
+        "NHL": {
+            "2026-27": {"regular_season_start": "2026-10-07", "postseason_start": "2027-04-19"}
+        },
+        "MLB": {
+            "2026": {"regular_season_start": "2026-03-26", "postseason_start": "2026-09-29"}
+        }
     }
 }
