@@ -93,6 +93,14 @@ class DecideTests(unittest.TestCase):
     def test_a_stake_smaller_than_one_contract_is_no_bet(self):
         self.assertIsNone(self.decide(stake_usd=0.50)[0])
 
+    def test_only_ticked_parts_of_the_season(self):
+        rules = {**RULES, "segments": ["regular", "postseason"]}
+        bet, reason = Betting.decide(0.70, 3, 0.60, 0.42, "NBA", rules, segment="preseason")
+        self.assertIsNone(bet)
+        self.assertIn("preseason", reason)
+        self.assertIsNotNone(Betting.decide(0.70, 3, 0.60, 0.42, "NBA", rules, segment="regular")[0])
+        self.assertIsNotNone(Betting.decide(0.70, 3, 0.60, 0.42, "NBA", rules)[0])  # no game date: rule skipped
+
 
 class ResultTests(unittest.TestCase):
     BET = {"side": "yes", "count": 10, "cost": 6.0, "fee": 0.17}
@@ -147,6 +155,12 @@ class DailyRunBettingTests(DailyLogTestCase):
 
     def test_no_bet_under_the_threshold(self):
         self.set_rules(min_edge=0.05)
+        self.run_day(OCT4, TODAY_MARKETS[:2])
+        self.assertEqual(self.bets(), [])
+
+    def test_no_bet_on_a_preseason_game_when_preseason_is_unticked(self):
+        # Oct 4 is NBA preseason (the shipped leagues.json starts the regular season Oct 20).
+        self.set_rules(min_edge=0.02, segments=["regular", "postseason"])
         self.run_day(OCT4, TODAY_MARKETS[:2])
         self.assertEqual(self.bets(), [])
 
@@ -244,6 +258,10 @@ class BettingViewTests(BettingConfigTestCase):
         self.assertEqual([e for e, r in rows.items() if r["current"]], [0.05])  # the rules' own threshold is a row
         self.assertEqual(rows[0.05]["bets"], 3)
 
+    def test_backtest_follows_the_season_rule(self):
+        rows = betting.backtest(self.conn, {**RULES, "segments": ["regular", "postseason"]})  # GAMES are preseason
+        self.assertEqual({r["bets"] for r in rows}, {0})
+
     def test_breakdowns_group_by_league_side_and_edge(self):
         groups = {g["title"]: g["rows"] for g in betting.breakdowns(betting.list_bets(self.conn))}
         self.assertEqual([r["label"] for r in groups["League"]], ["NBA"])
@@ -275,7 +293,8 @@ class BettingPageTests(BettingConfigTestCase):
 
     def valid_form(self, **changes):
         form = {"mode": "paper", "min_edge": "7.5", "stake_usd": "10", "max_daily_usd": "100", "min_price": "15",
-                "max_price": "85", "min_ais": "3", "leagues": ["NBA", "NHL"]}
+                "max_price": "85", "min_ais": "3", "leagues": ["NBA", "NHL"],
+                "segments": ["regular", "postseason"]}
         form.update(changes)
         return form
 
@@ -289,7 +308,8 @@ class BettingPageTests(BettingConfigTestCase):
         self.sign_in()
         page = self.client.get("/betting")
         self.assertEqual(page.status_code, 200)
-        for text in ("Paper betting", "What if?", "Breakdowns", "Home vs Away", 'value="5"', "Save rules"):
+        for text in ("Paper betting", "What if?", "Breakdowns", "Home vs Away", 'value="5"', "Save rules",
+                     'name="segments" value="preseason" checked'):
             self.assertIn(text, page.text)
         self.assertIn('href="/betting" class="active"', page.text)
 
@@ -300,7 +320,8 @@ class BettingPageTests(BettingConfigTestCase):
         saved = json.loads(self.config_path.read_text())
         self.assertEqual({k: saved[k] for k in RULES}, {
             "mode": "paper", "min_edge": 0.075, "stake_usd": 10.0, "max_daily_usd": 100.0, "min_price": 0.15,
-            "max_price": 0.85, "min_ais": 3, "leagues": ["NBA", "NHL"]})
+            "max_price": 0.85, "min_ais": 3, "leagues": ["NBA", "NHL"],
+            "segments": ["regular", "postseason"]})
         self.assertIn("Rules saved.", self.client.get(r.headers["location"]).text)
 
     def test_invalid_rules_save_nothing(self):

@@ -84,6 +84,12 @@
                 <label class="checkbox"><input type="checkbox" name="leagues" value="{{ code }}" {% if code in c.leagues %}checked{% endif %}> {{ code }}</label>
                 {% endfor %}
             </div>
+            <span class="settings-label">Parts of the season</span>
+            <div class="checkbox-row">
+                {% for seg in b.segments %}
+                <label class="checkbox"><input type="checkbox" name="segments" value="{{ seg }}" {% if seg in c.segments %}checked{% endif %}> {{ seg | capitalize }}</label>
+                {% endfor %}
+            </div>
         </div>
         <button type="submit" class="button inline primary">Save rules</button>
     </form>

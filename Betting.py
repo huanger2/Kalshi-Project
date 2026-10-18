@@ -35,6 +35,7 @@ import Leagues
 
 BETTING_PATH = Path(__file__).with_name("betting.json")
 MODES = ["off", "paper"]
+SEGMENTS = ["preseason", "regular", "postseason"]  # see SeasonType.segment()
 
 DEFAULTS = {
     "mode": "off",
@@ -45,6 +46,7 @@ DEFAULTS = {
     "max_price": 0.90,
     "min_ais": 2,
     "leagues": list(Leagues.LEAGUES),
+    "segments": list(SEGMENTS),
 }
 
 # Kalshi's trading fee on most markets: 7% of C * P * (1 - P), rounded up to
@@ -72,9 +74,13 @@ def decide(
     no_ask: Optional[float],
     league: Optional[str],
     config: dict,
+    segment: Optional[str] = None,
 ) -> tuple[Optional[dict], str]:
     """
     The bet the rules call for on one market, or None, plus a one-line reason.
+
+    `segment` is the game's part of the season ("preseason", "regular",
+    "postseason"; SeasonType.segment()); None (no game date) skips that rule.
 
     Leaves out the daily cap and anything else that depends on bets already
     placed (see consider()), so the what-if backtest can reuse it as is.
@@ -84,6 +90,8 @@ def decide(
     """
     if league not in config["leagues"]:
         return None, f"not betting on {league or 'unknown league'} games"
+    if segment is not None and segment not in config["segments"]:
+        return None, f"not betting on {segment} games"
     if ai_prob is None or ai_count < config["min_ais"]:
         return None, f"{ai_count} AI(s) answered, need {config['min_ais']}"
 
@@ -156,6 +164,7 @@ def consider(
         game_date:   ISO date the game is on (the daily cap is per game day).
     """
     import AIWeights
+    import SeasonType
     from EVCalculator import consensus_probability
 
     config = config or load_config()
@@ -168,7 +177,8 @@ def consider(
 
     league = Leagues.league_for_ticker(ticker)
     ai_prob = consensus_probability(predictions, {p.llm_name: AIWeights.get_weight(p.llm_name) for p in predictions})
-    bet, reason = decide(ai_prob, len(predictions), prices.get("yes_ask"), prices.get("no_ask"), league, config)
+    bet, reason = decide(ai_prob, len(predictions), prices.get("yes_ask"), prices.get("no_ask"), league, config,
+                         segment=SeasonType.segment_iso(game_date, league))
     if bet is None:
         print(f"no bet on {ticker}: {reason}")
         return None

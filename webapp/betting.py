@@ -102,7 +102,8 @@ def backtest(conn: sqlite3.Connection, config: dict) -> list[dict]:
         bets = []
         for g in games:
             no_ask = None if g["yes_bid"] is None else 1 - g["yes_bid"]
-            bet, _ = Betting.decide(g["ai_prob"], g["ai_count"], g["yes_ask"], no_ask, g["league"], rules)
+            bet, _ = Betting.decide(g["ai_prob"], g["ai_count"], g["yes_ask"], no_ask, g["league"], rules,
+                                    segment=g["segment"])
             if bet:
                 bets.append({**bet, **Betting.result(bet, g["outcome"], g["tied"])})
         rows.append({"min_edge": min_edge, "current": abs(min_edge - config["min_edge"]) < 1e-9,
@@ -121,6 +122,7 @@ def view(conn: sqlite3.Connection) -> dict:
         "config": config,
         "modes": Betting.MODES,
         "leagues": list(Leagues.LEAGUES),
+        "segments": Betting.SEGMENTS,
         "hosted": bool(DataDir.data_dir()),
         "file": {"name": Betting.BETTING_PATH.name, "override": ConfigFiles.has_override(Betting.BETTING_PATH)},
         "bets": bets[:200],
@@ -135,8 +137,8 @@ def view(conn: sqlite3.Connection) -> dict:
 def save_config(form: Mapping) -> None:
     """
     Validate the rules form and save betting.json; any invalid field raises
-    SettingsError, saving nothing. Every field is a string except "leagues",
-    the list of checked league codes.
+    SettingsError, saving nothing. Every field is a string except "leagues"
+    and "segments", the lists of checked league codes and season segments.
     """
     errors: list[str] = []
     mode = form.get("mode", "")
@@ -158,12 +160,14 @@ def save_config(form: Mapping) -> None:
     if min_price is not None and max_price is not None and min_price > max_price:
         errors.append("The lowest price can't be above the highest price.")
     leagues = [code for code in Leagues.LEAGUES if code in (form.get("leagues") or [])]
+    segments = [seg for seg in Betting.SEGMENTS if seg in (form.get("segments") or [])]
     if errors:
         raise SettingsError(errors)
 
     config = ConfigFiles.load(Betting.BETTING_PATH)
     config.update({"mode": mode, "min_edge": min_edge, "stake_usd": stake, "max_daily_usd": daily,
-                   "min_price": min_price, "max_price": max_price, "min_ais": int(min_ais), "leagues": leagues})
+                   "min_price": min_price, "max_price": max_price, "min_ais": int(min_ais), "leagues": leagues,
+                   "segments": segments})
     ConfigFiles.save(Betting.BETTING_PATH, config)
 
 

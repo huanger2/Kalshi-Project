@@ -322,6 +322,9 @@ The side with the bigger edge gets a bet if all of these hold:
 - the side is priced within the allowed range
 - enough AIs answered
 - the league is ticked
+- the game's part of the season (preseason, regular season or postseason,
+  from the season dates on the Settings tab) is ticked. Preseason is
+  unticked by default.
 - the day's cap isn't used up
 
 A bet buys as many whole contracts as the dollars-per-bet amount covers.

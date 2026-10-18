@@ -427,13 +427,14 @@ def save_betting_rules(
     max_price: str = Form(""),
     min_ais: str = Form(""),
     leagues: list[str] = Form([]),
+    segments: list[str] = Form([]),
     conn: sqlite3.Connection = Depends(get_db),
 ):
     _require_admin(request)
     try:
         betting.save_config({"mode": mode, "min_edge": min_edge, "stake_usd": stake_usd,
                              "max_daily_usd": max_daily_usd, "min_price": min_price, "max_price": max_price,
-                             "min_ais": min_ais, "leagues": leagues})
+                             "min_ais": min_ais, "leagues": leagues, "segments": segments})
     except settings.SettingsError as e:
         return _render_betting(request, conn, errors=e.errors, status_code=400)
     return RedirectResponse("/betting?saved=rules#rules", status_code=303)
