@@ -45,7 +45,8 @@
 <section class="panel" id="rules">
     <h2>Rules</h2>
     <p class="subtitle">Edge is the AI odds for a side minus what one contract on that side costs (its ask), in
-        points. Each game's better side is bet if its edge clears the minimum. Changes apply from the next daily run.</p>
+        points. Each game's better side is bet if its edge clears the minimum; when more games qualify than
+        the daily cap covers, the biggest edges get the money. Changes apply from the next daily run.</p>
     {% if message %}<p class="form-message" role="status">{{ message }}</p>{% endif %}
     {% for e in errors %}{% if loop.first %}<div class="form-error" role="alert">Nothing was saved:<ul>{% endif %}
         <li>{{ e }}</li>{% if loop.last %}</ul></div>{% endif %}{% endfor %}
@@ -98,7 +99,7 @@
 <section class="panel" id="backtest">
     <h2>What if?</h2>
     <p class="subtitle">These rules replayed over all {{ b.settled_games }} settled game{{ "" if b.settled_games == 1 else "s" }}
-        logged so far, at the prices when each was logged, for different minimum edges. The daily cap is left out.</p>
+        logged so far, at the prices when each was logged, for different minimum edges. Each day's cap goes to that day's biggest edges.</p>
     {% if not b.settled_games %}
         <p class="empty">No settled games yet.</p>
     {% else %}

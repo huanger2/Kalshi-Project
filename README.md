@@ -328,6 +328,8 @@ The side with the bigger edge gets a bet if all of these hold:
 - the day's cap isn't used up
 
 A bet buys as many whole contracts as the dollars-per-bet amount covers.
+When more games qualify in a day than the cap covers, the biggest edges get
+the money. A later run that day only gets what's left under the cap.
 Its cost includes Kalshi's trading fee, 7% of C × P × (1 − P) rounded up to
 the cent. A bet's result and P&L come from its game's outcome, which the
 daily run already settles. A tied NFL game pays $0.50 a contract.
@@ -336,7 +338,8 @@ Besides totals and the bet list, the tab shows:
 
 - **What if?** replays the current rules over every settled game logged so
   far, at the prices when each was logged, for a range of minimum edges, so
-  you can see which threshold would have paid. The daily cap is left out.
+  you can see which threshold would have paid. Each day's cap goes to that
+  day's biggest edges, as in the daily run.
 - **Breakdowns** split your bets' results by league, side and edge.
 
 Saving the rules works like the Settings tab: locally it edits

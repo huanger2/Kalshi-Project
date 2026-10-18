@@ -89,10 +89,11 @@ def breakdowns(bets: list[dict]) -> list[dict]:
 
 def backtest(conn: sqlite3.Connection, config: dict) -> list[dict]:
     """
-    Replay the rules (all but min_edge, which each row varies, and the daily
-    cap, which depends on order) over every settled game logged so far, at
-    the prices recorded when it was logged: YES at its ask, NO at 1 - yes_bid.
-    One summary row per edge threshold, flagging the one in effect.
+    Replay the rules (all but min_edge, which each row varies) over every
+    settled game logged so far, at the prices recorded when it was logged:
+    YES at its ask, NO at 1 - yes_bid. Each day's cap goes to its biggest
+    edges, as in the daily run. One summary row per edge threshold, flagging
+    the one in effect.
     """
     games = [g for g in queries.list_games(conn) if g["outcome"] is not None]
     edges = sorted({round(e, 6) for e in BACKTEST_EDGES + [config["min_edge"]]})
@@ -105,7 +106,8 @@ def backtest(conn: sqlite3.Connection, config: dict) -> list[dict]:
             bet, _ = Betting.decide(g["ai_prob"], g["ai_count"], g["yes_ask"], no_ask, g["league"], rules,
                                     segment=g["segment"])
             if bet:
-                bets.append({**bet, **Betting.result(bet, g["outcome"], g["tied"])})
+                bets.append({**bet, "game_date": g["game_date"], **Betting.result(bet, g["outcome"], g["tied"])})
+        bets, _ = Betting.apply_daily_cap(bets, config["max_daily_usd"])
         rows.append({"min_edge": min_edge, "current": abs(min_edge - config["min_edge"]) < 1e-9,
                      **summarize(bets)})
     return rows

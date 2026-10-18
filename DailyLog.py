@@ -332,6 +332,14 @@ def todays_rows(
         for market in get_todays_games(league, today):
             games.setdefault(market["event_ticker"], []).append(market)
 
+    bet_rules = None
+    if db_conn is not None:
+        try:
+            bet_rules = Betting.load_config()
+        except Exception as e:
+            print(f"no bets today: could not read the betting rules: {e}")
+    bets = []
+
     rows = []
     for event, markets in games.items():
         if event in already_logged:
@@ -381,10 +389,21 @@ def todays_rows(
                 print(f"could not record {event} in predictions.db: {e}")
             # Paper bets (betting.json) -- best-effort too: a betting problem
             # mustn't cost the game its spreadsheet row or its predictions.
-            try:
-                Betting.consider(db_conn, market, predictions, prices, today.isoformat(), opponent=opponent)
-            except Exception as e:
-                print(f"could not consider a bet on {event}: {e}")
+            if bet_rules is not None:
+                try:
+                    bet = Betting.candidate(db_conn, market, predictions, prices, today.isoformat(),
+                                            opponent=opponent, config=bet_rules)
+                    if bet:
+                        bets.append(bet)
+                except Exception as e:
+                    print(f"could not consider a bet on {event}: {e}")
+
+    # Placed once every game is in, so the daily cap goes to the biggest edges.
+    if bets:
+        try:
+            Betting.place(db_conn, bets, bet_rules)
+        except Exception as e:
+            print(f"could not place today's bets: {e}")
     return rows
 
 

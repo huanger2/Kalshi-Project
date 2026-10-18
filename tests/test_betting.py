@@ -102,6 +102,30 @@ class DecideTests(unittest.TestCase):
         self.assertIsNotNone(Betting.decide(0.70, 3, 0.60, 0.42, "NBA", rules)[0])  # no game date: rule skipped
 
 
+class DailyCapTests(unittest.TestCase):
+    @staticmethod
+    def bet(name, edge, outlay, day="2026-10-04"):
+        return {"ticker": name, "edge": edge, "cost": outlay, "fee": 0.0, "game_date": day}
+
+    def names(self, bets):
+        return [b["ticker"] for b in bets]
+
+    def test_biggest_edges_first(self):
+        kept, skipped = Betting.apply_daily_cap(
+            [self.bet("small", 0.05, 5), self.bet("big", 0.20, 5), self.bet("mid", 0.10, 5)], cap=10)
+        self.assertEqual((self.names(kept), self.names(skipped)), (["big", "mid"], ["small"]))
+
+    def test_a_cheaper_bet_can_fill_what_a_bigger_one_cant(self):
+        kept, _ = Betting.apply_daily_cap(
+            [self.bet("a", 0.20, 6), self.bet("b", 0.15, 6), self.bet("c", 0.10, 3)], cap=10)
+        self.assertEqual(self.names(kept), ["a", "c"])
+
+    def test_each_day_has_its_own_cap_and_counts_earlier_spending(self):
+        bets = [self.bet("d1", 0.10, 5, "2026-10-04"), self.bet("d2", 0.10, 5, "2026-10-05")]
+        kept, _ = Betting.apply_daily_cap(bets, cap=6, spent_for=lambda day: 4 if day == "2026-10-04" else 0)
+        self.assertEqual(self.names(kept), ["d2"])
+
+
 class ResultTests(unittest.TestCase):
     BET = {"side": "yes", "count": 10, "cost": 6.0, "fee": 0.17}
 
@@ -169,15 +193,25 @@ class DailyRunBettingTests(DailyLogTestCase):
         self.run_day(OCT4, TODAY_MARKETS[:2])
         self.assertEqual(self.bets(), [])
 
-    def test_the_daily_cap_stops_further_bets(self):
+    def test_the_daily_cap_goes_to_the_biggest_edge_not_the_first_game(self):
+        # Two games, each about $5 with its fee. Denver's (logged first) YES edge
+        # is 2.5 points; Golden State's (59-cent ask) is 5.5, so it gets the money.
         self.set_rules(min_edge=0.0, max_daily_usd=6.0)
-        self.run_day(OCT4, TODAY_MARKETS)  # two games, each about $5 with its fee
-        self.assertEqual(len(self.bets()), 1)
+        self.run_day(OCT4, TODAY_MARKETS)
+        self.assertEqual([b[0] for b in self.bets()], ["KXNBAGAME-26OCT04GSWLAC-GSW"])
+
+    def test_a_later_run_only_gets_whats_left_under_the_cap(self):
+        self.set_rules(min_edge=0.0, max_daily_usd=6.0)
+        self.run_day(OCT4, TODAY_MARKETS[:2])
+        self.run_day(OCT4, TODAY_MARKETS)  # Golden State shows up later the same day
+        self.assertEqual([b[0] for b in self.bets()], ["KXNBAGAME-26OCT04UTADEN-DEN"])
 
     def test_a_betting_failure_still_logs_the_game(self):
-        with mock.patch.object(Betting, "consider", side_effect=RuntimeError("boom")):
-            sheet = self.run_day(OCT4, TODAY_MARKETS[:2])
-        self.assertEqual(len(sheet), 1)
+        for name in ("candidate", "place", "load_config"):
+            with self.subTest(failing=name), \
+                 mock.patch.object(Betting, name, side_effect=RuntimeError("boom")):
+                sheet = self.run_day(OCT4, TODAY_MARKETS[:2])
+                self.assertEqual(len(sheet), 1)
 
     def test_the_same_market_is_not_bet_twice(self):
         conn = Tracker.connect(self.db_path)
@@ -257,6 +291,11 @@ class BettingViewTests(BettingConfigTestCase):
         self.assertEqual(rows[0.15]["won"], 1)
         self.assertEqual([e for e, r in rows.items() if r["current"]], [0.05])  # the rules' own threshold is a row
         self.assertEqual(rows[0.05]["bets"], 3)
+
+    def test_backtest_applies_each_days_cap_to_the_biggest_edges(self):
+        rows = {round(r["min_edge"], 2): r for r in betting.backtest(self.conn, {**RULES, "max_daily_usd": 6.0})}
+        self.assertEqual(rows[0.04]["bets"], 1)  # all three qualify on one day; $6 covers one
+        self.assertEqual(rows[0.04]["won"], 1)   # the 18 point NO bet, which won
 
     def test_backtest_follows_the_season_rule(self):
         rows = betting.backtest(self.conn, {**RULES, "segments": ["regular", "postseason"]})  # GAMES are preseason

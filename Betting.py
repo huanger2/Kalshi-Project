@@ -12,6 +12,8 @@ each side of the market:
 
 The side with the bigger edge gets a bet if it clears betting.json's rules
 (see decide()). A bet buys as many whole contracts as stake_usd covers.
+When more games qualify in a day than max_daily_usd covers, the biggest
+edges get the money (see apply_daily_cap()).
 
 Only paper betting exists so far: a bet is recorded in predictions.db's
 bets table at the price it would have been bought at, plus Kalshi's fee,
@@ -28,7 +30,7 @@ import datetime
 import math
 import sqlite3
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import ConfigFiles
 import Leagues
@@ -144,7 +146,32 @@ def spent_on(conn: sqlite3.Connection, game_date: str, mode: str) -> float:
     return row[0]
 
 
-def consider(
+def apply_daily_cap(
+    bets: list[dict], cap: float, spent_for: Callable[[str], float] = lambda game_date: 0.0
+) -> tuple[list[dict], list[dict]]:
+    """
+    Which bets fit under each game day's cap (cost + fee), biggest edge
+    first: a bet that doesn't fit what's left is skipped, and smaller ones
+    after it can still fill the gap. `spent_for(game_date)` is what that day
+    already used (bets placed by an earlier run). Returns (kept, skipped).
+    """
+    kept, skipped = [], []
+    by_day: dict[str, list[dict]] = {}
+    for bet in bets:
+        by_day.setdefault(bet["game_date"], []).append(bet)
+    for game_date, day_bets in by_day.items():
+        spent = spent_for(game_date)
+        for bet in sorted(day_bets, key=lambda b: b["edge"], reverse=True):
+            outlay = bet["cost"] + bet["fee"]
+            if spent + outlay > cap + 1e-9:
+                skipped.append(bet)
+            else:
+                kept.append(bet)
+                spent += outlay
+    return kept, skipped
+
+
+def candidate(
     conn: sqlite3.Connection,
     market: dict,
     predictions: list,
@@ -154,14 +181,17 @@ def consider(
     config: Optional[dict] = None,
 ) -> Optional[dict]:
     """
-    Apply the rules to a market the daily run just logged, recording a bet in
-    the bets table if they call for one. Returns the bet, or None.
+    The bet the rules call for on a market the daily run just logged, or
+    None. Not placed yet: place() decides which candidates fit the daily cap.
 
     Args:
         market:      Kalshi market dict (the one whose predictions were logged).
         predictions: That market's LLMPrediction objects.
         prices:      Kalshi.get_prices(market) -- yes_ask/no_ask are what a bet pays.
         game_date:   ISO date the game is on (the daily cap is per game day).
+
+    Returns decide()'s bet plus what place() records: mode, ticker,
+    event_ticker, league, game_date, team, opponent, reason.
     """
     import AIWeights
     import SeasonType
@@ -182,19 +212,42 @@ def consider(
     if bet is None:
         print(f"no bet on {ticker}: {reason}")
         return None
-    spent = spent_on(conn, game_date, mode)
-    if spent + bet["cost"] + bet["fee"] > config["max_daily_usd"] + 1e-9:
-        print(f"no bet on {ticker}: today's ${config['max_daily_usd']:.2f} cap is used up (${spent:.2f} so far)")
-        return None
+    return {**bet, "mode": mode, "ticker": ticker, "event_ticker": market.get("event_ticker"), "league": league,
+            "game_date": game_date, "team": market.get("yes_sub_title"), "opponent": opponent, "reason": reason}
 
-    conn.execute(
-        "INSERT INTO bets (created_at, mode, ticker, event_ticker, league, game_date, team, opponent, "
-        " side, price, count, cost, fee, ai_prob, edge) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (datetime.datetime.now().isoformat(timespec="seconds"), mode, ticker, market.get("event_ticker"), league,
-         game_date, market.get("yes_sub_title"), opponent, bet["side"], bet["price"], bet["count"], bet["cost"],
-         bet["fee"], ai_prob, bet["edge"]),
+
+def place(conn: sqlite3.Connection, candidates: list[dict], config: Optional[dict] = None) -> list[dict]:
+    """
+    Record the candidates that fit under each day's cap, biggest edge first
+    (see apply_daily_cap()), counting bets earlier runs already placed that
+    day. Returns the bets placed.
+    """
+    config = config or load_config()
+    kept, skipped = apply_daily_cap(
+        candidates, config["max_daily_usd"], lambda game_date: spent_on(conn, game_date, config["mode"])
     )
+    now = datetime.datetime.now().isoformat(timespec="seconds")
+    for bet in kept:
+        conn.execute(
+            "INSERT INTO bets (created_at, mode, ticker, event_ticker, league, game_date, team, opponent, "
+            " side, price, count, cost, fee, ai_prob, edge) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (now, bet["mode"], bet["ticker"], bet["event_ticker"], bet["league"], bet["game_date"], bet["team"],
+             bet["opponent"], bet["side"], bet["price"], bet["count"], bet["cost"], bet["fee"], bet["ai_prob"],
+             bet["edge"]),
+        )
+        print(f"{bet['mode']} bet on {bet['ticker']}: {bet['reason']}")
     conn.commit()
-    print(f"{mode} bet on {ticker}: {reason}")
-    return bet
+    for bet in skipped:
+        print(f"no bet on {bet['ticker']}: {bet['reason']}, but the ${config['max_daily_usd']:.2f} daily cap "
+              f"went to bigger edges")
+    return kept
+
+
+def consider(conn: sqlite3.Connection, market: dict, predictions: list, prices: dict, game_date: str,
+             opponent: Optional[str] = None, config: Optional[dict] = None) -> Optional[dict]:
+    """candidate() and place() for a single market: the bet placed, or None."""
+    config = config or load_config()
+    bet = candidate(conn, market, predictions, prices, game_date, opponent=opponent, config=config)
+    placed = place(conn, [bet], config) if bet else []
+    return placed[0] if placed else None
