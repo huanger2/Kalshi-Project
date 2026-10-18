@@ -473,9 +473,14 @@ async def upload_daily_logs(request: Request, files: list[UploadFile] = File(...
 # --- For Railway's cron service (trigger_daily_run.py); see webapp/daily_run.py ---
 
 def _require_daily_run_token(request: Request) -> None:
+    # Every refusal is logged, so the web service's logs show a misconfigured
+    # cron service's attempts instead of nothing.
     if not daily_run.is_configured():
+        print(f"refused {request.method} /internal/daily-run: DAILY_RUN_TOKEN isn't set on this service", flush=True)
         raise HTTPException(status_code=503, detail="DAILY_RUN_TOKEN isn't set on this server")
     if not daily_run.token_ok(request.headers.get("authorization")):
+        sent = "no Authorization header" if not request.headers.get("authorization") else "a token that doesn't match"
+        print(f"refused {request.method} /internal/daily-run: sent {sent} DAILY_RUN_TOKEN", flush=True)
         raise HTTPException(status_code=401, detail="Bad or missing daily-run token")
 
 
@@ -484,6 +489,8 @@ def start_daily_run(request: Request):
     """Kick off DailyLog.run() in the background; 409 if one is already going."""
     _require_daily_run_token(request)
     run_id = daily_run.start()
+    print(f"daily run requested: {'started run #' + str(run_id) if run_id else 'one is already in progress'}",
+          flush=True)
     if run_id is None:
         return JSONResponse({"detail": "A daily run is already in progress", **daily_run.status()}, status_code=409)
     return daily_run.status()

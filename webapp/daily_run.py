@@ -15,6 +15,7 @@ refuses every request -- failing closed, like the admin login.
 """
 
 import hmac
+import json
 import os
 import threading
 import time
@@ -25,6 +26,45 @@ _lock = threading.Lock()  # held for the whole run: one at a time
 _status_lock = threading.Lock()
 _status = {"run_id": 0, "state": "idle", "started_at": None, "finished_at": None,
            "settled": None, "logged": None, "error": None}
+
+STATUS_NAME = "daily_run_status.json"
+
+
+def _status_path() -> Optional[str]:
+    """
+    Hosted (DATA_DIR set), the last run's status is kept on the volume, so a
+    redeploy doesn't wipe the record of whether this morning's run happened.
+    Locally it stays in memory only.
+    """
+    import DataDir
+    return DataDir.data_path(STATUS_NAME) if DataDir.data_dir() else None
+
+
+def _save() -> None:
+    path = _status_path()
+    if path is None:
+        return
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(_status, f)
+        os.replace(tmp, path)
+    except OSError as e:  # best-effort: never let bookkeeping fail a run
+        print(f"could not save daily run status: {e}", flush=True)
+
+
+def _load() -> None:
+    path = _status_path()
+    if path is None or not os.path.exists(path):
+        return
+    try:
+        with open(path, encoding="utf-8") as f:
+            saved = json.load(f)
+    except (OSError, ValueError):
+        return
+    _status.update({k: saved.get(k) for k in _status})
+    if _status["state"] == "running":  # the process stopped mid-run (e.g. a redeploy)
+        _status.update(state="failed", error="Interrupted: the web service restarted during the run.")
 
 
 def is_configured() -> bool:
@@ -47,6 +87,7 @@ def status() -> dict:
 def _update(**fields) -> None:
     with _status_lock:
         _status.update(fields)
+        _save()
 
 
 def _run(run) -> None:
@@ -75,5 +116,9 @@ def start(run=None) -> Optional[int]:
         _status.update(run_id=_status["run_id"] + 1, state="running", started_at=time.time(),
                        finished_at=None, settled=None, logged=None, error=None)
         run_id = _status["run_id"]
+        _save()
     threading.Thread(target=_run, args=(run,), name=f"daily-run-{run_id}", daemon=True).start()
     return run_id
+
+
+_load()

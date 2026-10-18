@@ -411,3 +411,40 @@ class DatabaseUnavailablePageTests(unittest.TestCase):
         r = self.client.get("/api/accuracy")
         self.assertEqual(r.status_code, 503)
         self.assertIn("attach a volume", r.json()["detail"])
+
+
+class PersistedRunStatusTests(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.path = os.path.join(tmp.name, daily_run.STATUS_NAME)
+        saved = dict(daily_run._status)
+        self.addCleanup(daily_run._status.update, saved)
+        patcher = mock.patch.dict("os.environ", {"DATA_DIR": tmp.name})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def finish(self):
+        daily_run._lock.acquire()
+        daily_run._lock.release()
+
+    def test_a_finished_run_is_saved_and_survives_a_restart(self):
+        daily_run.start(run=lambda: (2, 5))
+        self.finish()
+        with open(self.path, encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["state"], "done")
+        daily_run._status.update(run_id=0, state="idle", logged=None)  # a fresh process
+        daily_run._load()
+        self.assertEqual((daily_run.status()["state"], daily_run.status()["logged"]), ("done", 5))
+
+    def test_a_run_cut_off_by_a_restart_reads_as_interrupted(self):
+        with open(self.path, "w", encoding="utf-8") as f:
+            json.dump({"run_id": 3, "state": "running"}, f)
+        daily_run._load()
+        self.assertEqual(daily_run.status()["state"], "failed")
+        self.assertIn("Interrupted", daily_run.status()["error"])
+
+    def test_nothing_is_written_locally(self):
+        with mock.patch.dict("os.environ"):
+            os.environ.pop("DATA_DIR")
+            self.assertIsNone(daily_run._status_path())
