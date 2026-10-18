@@ -34,9 +34,26 @@
                 <td>{{ f.modified | replace("T", " ") }}</td>
             </tr>
             {% endfor %}
+            {% if day_logs %}
+            <tr>
+                <td>
+                    <form class="day-log-pick" method="get" action="/admin/data/download">
+                        <select name="name" aria-label="Daily log to download">
+                            {% for f in day_logs %}
+                            <option value="{{ f.name }}">{{ f.name | replace("daily_logs/", "") }}</option>
+                            {% endfor %}
+                        </select>
+                        <button type="submit" class="button inline">Download</button>
+                    </form>
+                </td>
+                <td>Daily logs, one spreadsheet per day</td>
+                <td>{{ day_logs | length }} day{{ "" if day_logs | length == 1 else "s" }}</td>
+                <td>{{ day_logs[0].modified | replace("T", " ") }}</td>
+            </tr>
+            {% endif %}
         </tbody>
     </table>
-    {% if not files %}
+    {% if not files and not day_logs %}
         <p class="empty">Nothing generated on this server yet -- upload your history below, or wait
             for the first daily run.</p>
     {% endif %}

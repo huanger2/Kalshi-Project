@@ -341,6 +341,20 @@ class AdminDataPageTests(WebAppHostingTestCase):
         r = self.client.post("/admin/data/daily-logs", files=[("files", ("2026-10-04.xlsx", data))])
         self.assertIn("Skipped 2026-10-04.xlsx", r.text)
 
+    def test_day_files_are_one_dropdown(self):
+        self.sign_in()
+        data = _xlsx_bytes(None)
+        self.client.post("/admin/data/daily-logs", files=[
+            ("files", ("2026-10-04.xlsx", data)), ("files", ("2026-10-05.xlsx", data)),
+        ])
+        page = self.client.get("/admin/data").text
+        self.assertEqual(page.count('<option value="daily_logs/'), 2)
+        self.assertNotIn('href="/admin/data/download/daily_logs/', page)
+        self.assertLess(page.index("2026-10-05"), page.index("2026-10-04"))  # newest first
+        r = self.client.get("/admin/data/download", params={"name": "daily_logs/2026-10-04.xlsx"})
+        self.assertEqual(r.content, data)
+        self.assertEqual(self.client.get("/admin/data/download", params={"name": "../leagues.json"}).status_code, 404)
+
     def test_downloads(self):
         self.sign_in()
         conn = Tracker.connect(self.db_path)

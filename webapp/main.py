@@ -407,9 +407,12 @@ def _require_admin(request: Request) -> None:
 
 def _render_data_page(request: Request, message: Optional[str] = None, error: Optional[str] = None,
                       status_code: int = 200):
+    files = data_files.listing()
+    day_logs = [f for f in files if f["name"].startswith("daily_logs/")]  # newest first, one dropdown
     return templates.TemplateResponse(
         request, "admin_data.html",
-        {"files": data_files.listing(), "run": daily_run.status(), "message": message, "error": error,
+        {"files": [f for f in files if f not in day_logs], "day_logs": day_logs,
+         "run": daily_run.status(), "message": message, "error": error,
          "ai_names": DEFAULT_LLM_NAMES, "active_tab": "data"},
         status_code=status_code,
     )
@@ -431,6 +434,12 @@ def download_predictions_export(request: Request):
     os.close(fd)
     Export.export_to_excel(db_path=data_files.db_path(), out_path=path)
     return FileResponse(path, filename="predictions.xlsx", background=BackgroundTask(os.remove, path))
+
+
+@app.get("/admin/data/download")
+def download_data_file_by_query(request: Request, name: str):
+    """The daily log dropdown's form submits here (?name=daily_logs/2026-10-04.xlsx)."""
+    return download_data_file(request, name)
 
 
 @app.get("/admin/data/download/{name:path}")
