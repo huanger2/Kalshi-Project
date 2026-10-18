@@ -191,6 +191,30 @@ def save_pricing(form: Mapping[str, str]) -> None:
     ConfigFiles.save(path, config)
 
 
+def save_prices(updates: Mapping[str, object]) -> None:
+    """
+    Set (or add) specific models' prices: {model: [input, output]}, each USD per 1M tokens or
+    None for unknown. Other models' prices are left as they are. Used for applying suggestions.
+    """
+    errors: list[str] = []
+    prices = {}
+    for model, value in updates.items():
+        name = _model_id(model, "Model", errors)
+        if not (isinstance(value, (list, tuple)) and len(value) == 2):
+            errors.append(f"{model}: expected an input and an output price.")
+            continue
+        parsed = [_number("" if v is None else str(v), f"{model} {side} price", errors)
+                  for v, side in zip(value, ("input", "output"))]
+        if name:
+            prices[name] = {"input_per_million": parsed[0], "output_per_million": parsed[1]}
+    if errors:
+        raise SettingsError(errors)
+    path = paths()["pricing"]
+    config = ConfigFiles.load(path)
+    config["models"] = dict(sorted({**config.get("models", {}), **prices}.items()))
+    ConfigFiles.save(path, config)
+
+
 def save_leagues(form: Mapping[str, str], today: Optional[datetime.date] = None) -> None:
     import Leagues
 

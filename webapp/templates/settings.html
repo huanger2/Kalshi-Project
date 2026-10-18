@@ -25,8 +25,75 @@
 
 {% block content %}
 
+<section class="panel" id="suggestions">
+    <div class="panel-head">
+        <div>
+            <h1>Settings</h1>
+            <p class="subtitle">Ask Gemini (with Google Search) for the latest AI models, their prices, and announced
+                league dates. Nothing changes until you review and apply.</p>
+        </div>
+        <form method="post" action="/settings/suggestions"
+              onsubmit="var b = this.querySelector('button'); b.disabled = true; b.textContent = 'Asking Gemini (up to a minute)…';">
+            <button type="submit" class="button inline">Ask Gemini for updates</button>
+        </form>
+    </div>
+
+    {% if applied %}<p class="form-message" role="status">Applied: {{ applied }}.</p>{% endif %}
+    {% if suggest_error %}<p class="form-error" role="alert">{{ suggest_error }}</p>{% endif %}
+
+    {% if suggested %}
+        {% for problem in suggested.problems %}
+            <p class="form-error" role="alert">Couldn't get {{ problem }}</p>
+        {% endfor %}
+        {% if suggested.unsearched %}
+            <p class="form-error" role="alert">Gemini answered {{ suggested.unsearched | join(" and ") }} from memory
+                without searching the web, so those suggestions are unverified and may be outdated. Asking again
+                often gets it to search.</p>
+        {% endif %}
+        {% if not suggested.changes %}
+            <p class="form-message" role="status">Gemini found nothing to update: everything matches what it found
+                ({{ suggested.asked_at | replace("T", " ") }}).</p>
+        {% else %}
+        <form method="post" action="/settings/suggestions/apply" class="settings-form">
+            <p class="note">Suggested {{ suggested.asked_at | replace("T", " ") }}. AI answers can be wrong -- check
+                against the sources below before applying, especially model names: a wrong one breaks the next
+                daily run for that AI.</p>
+            <table class="settings-table suggestions">
+                <thead><tr><th>Apply</th><th>Setting</th><th>Now</th><th>Gemini suggests</th></tr></thead>
+                <tbody>
+                    {% for c in suggested.changes %}
+                    {% if loop.first or c.section != suggested.changes[loop.index0 - 1].section %}
+                    <tr class="group-row"><td colspan="4">{{ c.section }}</td></tr>
+                    {% endif %}
+                    <tr>
+                        <td>
+                            <input type="checkbox" name="apply::{{ c.id }}" id="apply-{{ loop.index }}">
+                            <input type="hidden" name="value::{{ c.id }}" value="{{ c.value }}">
+                        </td>
+                        <td><label for="apply-{{ loop.index }}">{{ c.label }}</label></td>
+                        <td class="muted">{{ c.current }}</td>
+                        <td><strong>{{ c.suggested }}</strong></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            <button type="submit" class="button inline primary">Apply selected</button>
+        </form>
+        {% endif %}
+        {% if suggested.sources %}
+        <details class="sources">
+            <summary>Sources Gemini used ({{ suggested.sources | length }})</summary>
+            <ul>
+                {% for src in suggested.sources %}
+                <li><a href="{{ src.uri }}" target="_blank" rel="noopener noreferrer">{{ src.title }}</a></li>
+                {% endfor %}
+            </ul>
+        </details>
+        {% endif %}
+    {% endif %}
+</section>
+
 <section class="panel" id="models">
-    <h1>Settings</h1>
     <h2>AI models</h2>
     <p class="subtitle">Which model each AI is asked with, from the next daily run on.</p>
     {{ section_status("models") }}

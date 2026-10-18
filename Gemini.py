@@ -35,3 +35,43 @@ def ask_gemini(question: str, max_tokens: int = 1024, model: str | None = None) 
         usage_attr="usage_metadata", input_field="prompt_token_count", output_field="candidates_token_count",
     )
     return response.text
+
+
+def ask_gemini_with_search(question: str, max_tokens: int = 8192,
+                           model: str | None = None) -> tuple[str, list[dict], list[str]]:
+    """
+    Like ask_gemini(), but Gemini may run Google searches to answer -- for
+    questions about things newer than its training data. Returns the answer
+    text, the web pages it drew on as [{"title", "uri"}], and the searches it
+    ran. Gemini decides for itself whether to search: empty lists mean it
+    answered from memory, which callers should treat as unverified.
+
+    max_tokens is larger than ask_gemini()'s because searching and reasoning
+    over the results spends output tokens before the answer itself. Google
+    bills search grounding separately from tokens; that part isn't in the
+    CostTracker estimate.
+    """
+    from google.genai import types
+
+    model = model or get_model("gemini")
+    response = _get_client().models.generate_content(
+        model=model,
+        contents=question,
+        config=types.GenerateContentConfig(
+            max_output_tokens=max_tokens,
+            tools=[types.Tool(google_search=types.GoogleSearch())],
+        ),
+    )
+    CostTracker.record_from_response(
+        "Gemini", model, response, "settings suggestions (with search)",
+        usage_attr="usage_metadata", input_field="prompt_token_count", output_field="candidates_token_count",
+    )
+    sources, queries = [], []
+    for candidate in response.candidates or []:
+        metadata = getattr(candidate, "grounding_metadata", None)
+        queries += [q for q in (getattr(metadata, "web_search_queries", None) or []) if q not in queries]
+        for chunk in (getattr(metadata, "grounding_chunks", None) or []):
+            web = getattr(chunk, "web", None)
+            if web is not None and web.uri and all(s["uri"] != web.uri for s in sources):
+                sources.append({"title": web.title or web.domain or web.uri, "uri": web.uri})
+    return response.text or "", sources, queries

@@ -287,6 +287,21 @@ it survives deploys. Edits to that file pushed from git then don't apply on
 the server until you click **Reset to repo version** (see
 [`ConfigFiles.py`](ConfigFiles.py)).
 
+**Ask Gemini for updates** (top of the Settings tab) has Gemini search the
+web for each AI's newest model, those models' prices, and announced league
+dates, then lists every proposed change next to the current value, with the
+sources it used. **Nothing is applied until you tick changes and click
+Apply selected**, and applied values go through the same validation as a
+manual edit. AI answers can be wrong, and a wrong model ID breaks that AI's
+next daily run, so check the sources first.
+
+Gemini decides for itself whether to search. Each part is asked as a short
+research question with search enabled, then formatted into JSON by a second
+call, because a long format-heavy question makes it skip searching and
+answer from memory. If it still answers a part without searching, the page
+flags that part as unverified. One click takes about two minutes and makes
+four Gemini calls, logged in API spend; Google bills web search separately.
+
 ### Signing in
 
 The first page a visitor sees is a sign-in screen: sign in, or **Continue

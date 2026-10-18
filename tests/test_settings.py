@@ -163,7 +163,9 @@ class SaveSectionTests(ConfigTestCase):
         self.assertEqual(next(r for r in nfl["seasons"] if r["season"] == "2027")["regular_default"], "2027-09-09")
 
 
-class SettingsPageTests(ConfigTestCase):
+class SettingsPageTestCase(ConfigTestCase):
+    """ConfigTestCase plus a web client and an admin login (no tests of its own)."""
+
     def setUp(self):
         super().setUp()
         db = str(self.dir / "predictions.db")
@@ -184,6 +186,8 @@ class SettingsPageTests(ConfigTestCase):
     def sign_in(self):
         self.client.post("/login", data={"username": "admin", "password": "s3cret", "next": "/"})
 
+
+class SettingsPageTests(SettingsPageTestCase):
     def test_guests_are_kept_out(self):
         self.client.post("/guest")
         self.assertEqual(self.client.get("/settings").status_code, 403)

@@ -25,7 +25,7 @@ from fastapi.templating import Jinja2Templates
 import Leagues
 import Tracker
 from DailyLog import DEFAULT_LLM_NAMES
-from webapp import auth, daily_run, data_files, queries, settings
+from webapp import auth, daily_run, data_files, queries, settings, suggestions
 
 HERE = Path(__file__).parent
 
@@ -303,19 +303,43 @@ def api_ai_detail(
 # --- Admin settings tab: edit the JSON config files (see webapp/settings.py) ---
 
 def _render_settings(request: Request, saved: Optional[str] = None, errors: Optional[dict] = None,
-                     status_code: int = 200):
+                     status_code: int = 200, suggested: Optional[dict] = None,
+                     suggest_error: Optional[str] = None, applied: Optional[str] = None):
     return templates.TemplateResponse(
         request, "settings.html",
         {"s": settings.view(), "saved": saved, "errors": errors or {},
+         "suggested": suggested, "suggest_error": suggest_error, "applied": applied,
          "ai_names": DEFAULT_LLM_NAMES, "active_tab": "settings"},
         status_code=status_code,
     )
 
 
 @app.get("/settings", response_class=HTMLResponse)
-def settings_page(request: Request, saved: Optional[str] = None):
+def settings_page(request: Request, saved: Optional[str] = None, applied: Optional[str] = None):
     _require_admin(request)
-    return _render_settings(request, saved=saved if saved in settings.SAVERS else None)
+    return _render_settings(request, saved=saved if saved in settings.SAVERS else None,
+                            applied=applied[:200] if applied else None)
+
+
+@app.post("/settings/suggestions", response_class=HTMLResponse)
+def ask_for_suggestions(request: Request):
+    """One Gemini call (with Google Search) for proposed updates, shown for review -- nothing is saved."""
+    _require_admin(request)
+    try:
+        result = suggestions.fetch()
+    except Exception as e:  # a bad reply or an API failure: tell the admin, don't 500
+        return _render_settings(request, suggest_error=f"Couldn't get suggestions from Gemini: {e}", status_code=502)
+    return _render_settings(request, suggested=result)
+
+
+@app.post("/settings/suggestions/apply", response_class=HTMLResponse)
+async def apply_suggestions(request: Request):
+    _require_admin(request)
+    saved, errors = suggestions.apply(dict(await request.form()))
+    if errors:
+        return _render_settings(request, suggest_error="Some suggestions weren't applied: " + "; ".join(errors),
+                                applied=", ".join(saved) or None, status_code=400)
+    return RedirectResponse(f"/settings?applied={quote(', '.join(saved) or 'nothing')}", status_code=303)
 
 
 @app.post("/settings/{section}", response_class=HTMLResponse)
