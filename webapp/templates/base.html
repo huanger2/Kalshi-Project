@@ -13,7 +13,6 @@
         {% if request.state.role %}
         <div class="account">
             {% if request.state.role == "admin" %}
-                <a href="/admin/data" class="{% if active_tab == 'data' %}active{% endif %}">Data</a>
                 <span>Signed in</span>
                 <form method="post" action="/logout"><button type="submit" class="link-button">Sign out</button></form>
             {% else %}
@@ -36,6 +35,11 @@
         {% for name in ai_names %}
             <a href="/ai/{{ name }}" class="{% if active_tab == name %}active{% endif %}">{{ name }}</a>
         {% endfor %}
+        {% if request.state.role == "admin" %}
+            <span class="tab-divider" aria-hidden="true"></span>
+            <a href="/settings" class="{% if active_tab == 'settings' %}active{% endif %}">Settings</a>
+            <a href="/admin/data" class="{% if active_tab == 'data' %}active{% endif %}">Data</a>
+        {% endif %}
     </nav>
     {% endif %}
     <main>

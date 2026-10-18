@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+import ConfigFiles
 import Tracker
 
 PRICING_PATH = Path(__file__).with_name("model_pricing.json")
@@ -50,7 +51,7 @@ def _now() -> str:
 
 def _load_pricing() -> dict:
     try:
-        raw = json.loads(PRICING_PATH.read_text(encoding="utf-8"))
+        raw = json.loads(ConfigFiles.effective(PRICING_PATH).read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {}
     except json.JSONDecodeError as e:

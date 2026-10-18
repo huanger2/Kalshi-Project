@@ -25,7 +25,7 @@ from fastapi.templating import Jinja2Templates
 import Leagues
 import Tracker
 from DailyLog import DEFAULT_LLM_NAMES
-from webapp import auth, daily_run, data_files, queries
+from webapp import auth, daily_run, data_files, queries, settings
 
 HERE = Path(__file__).parent
 
@@ -298,6 +298,49 @@ def api_ai_detail(
         "stats": queries.ai_stats(conn, matched, segment=segment, season_year=season, league=league),
         "predictions": queries.ai_predictions(conn, matched, segment=segment, season_year=season, league=league),
     }
+
+
+# --- Admin settings tab: edit the JSON config files (see webapp/settings.py) ---
+
+def _render_settings(request: Request, saved: Optional[str] = None, errors: Optional[dict] = None,
+                     status_code: int = 200):
+    return templates.TemplateResponse(
+        request, "settings.html",
+        {"s": settings.view(), "saved": saved, "errors": errors or {},
+         "ai_names": DEFAULT_LLM_NAMES, "active_tab": "settings"},
+        status_code=status_code,
+    )
+
+
+@app.get("/settings", response_class=HTMLResponse)
+def settings_page(request: Request, saved: Optional[str] = None):
+    _require_admin(request)
+    return _render_settings(request, saved=saved if saved in settings.SAVERS else None)
+
+
+@app.post("/settings/{section}", response_class=HTMLResponse)
+async def save_settings(request: Request, section: str):
+    _require_admin(request)
+    saver = settings.SAVERS.get(section)
+    if saver is None:
+        raise HTTPException(status_code=404, detail=f"No settings section {section!r}")
+    try:
+        saver(dict(await request.form()))
+    except settings.SettingsError as e:
+        return _render_settings(request, errors={section: e.errors}, status_code=400)
+    return RedirectResponse(f"/settings?saved={section}#{section}", status_code=303)
+
+
+@app.post("/settings/{section}/reset")
+def reset_settings(request: Request, section: str):
+    """Hosted only: drop the volume copy so the deployed file is in effect again."""
+    _require_admin(request)
+    path = settings.paths().get(section)
+    if path is None:
+        raise HTTPException(status_code=404, detail=f"No settings section {section!r}")
+    import ConfigFiles
+    ConfigFiles.reset(path)
+    return RedirectResponse(f"/settings?saved={section}#{section}", status_code=303)
 
 
 # --- Admin data page: move history in, get generated spreadsheets out ---

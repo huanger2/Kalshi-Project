@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}Settings - AI vs Kalshi{% endblock %}
+
+{% macro section_status(key) %}
+    {% set f = s.files[key] %}
+    {% if saved == key %}<p class="form-message" role="status">Saved.</p>{% endif %}
+    {% for e in errors.get(key, []) %}{% if loop.first %}<div class="form-error" role="alert">Nothing was saved:<ul>{% endif %}
+        <li>{{ e }}</li>{% if loop.last %}</ul></div>{% endif %}{% endfor %}
+    <p class="note">
+        {% if s.hosted and f.override %}
+            Saved on this server, overriding the deployed <code>{{ f.name }}</code> -- edits to that file pushed from
+            git won't apply here until you reset.
+            <button type="submit" form="reset-{{ key }}" class="link-button">Reset to repo version</button>
+        {% elif s.hosted %}
+            Using the deployed <code>{{ f.name }}</code>. Saving keeps your changes on this server, so they
+            survive deploys.
+        {% else %}
+            Saves to <code>{{ f.name }}</code> in the project folder.
+        {% endif %}
+    </p>
+    {% if s.hosted and f.override %}
+        <form id="reset-{{ key }}" method="post" action="/settings/{{ key }}/reset"></form>
+    {% endif %}
+{% endmacro %}
+
+{% block content %}
+
+<section class="panel" id="models">
+    <h1>Settings</h1>
+    <h2>AI models</h2>
+    <p class="subtitle">Which model each AI is asked with, from the next daily run on.</p>
+    {{ section_status("models") }}
+    <form class="settings-form" method="post" action="/settings/models">
+        <div class="settings-grid">
+            {% for p in s.providers %}
+                <label for="model-{{ p.key }}">{{ p.name }}</label>
+                <input id="model-{{ p.key }}" name="model::{{ p.key }}" value="{{ p.model }}" list="priced-models"
+                       required maxlength="100" spellcheck="false">
+            {% endfor %}
+        </div>
+        <datalist id="priced-models">
+            {% for row in s.pricing %}<option value="{{ row.model }}">{% endfor %}
+        </datalist>
+        <button type="submit" class="button inline primary">Save models</button>
+    </form>
+</section>
+
+<section class="panel" id="weights">
+    <h2>AI weights</h2>
+    <p class="subtitle">How much each AI counts in the "AI odds" consensus. 1.0 each is equal weighting; 0 leaves an
+        AI out.</p>
+    {{ section_status("weights") }}
+    <form class="settings-form" method="post" action="/settings/weights">
+        <div class="settings-grid">
+            {% for p in s.providers %}
+                <label for="weight-{{ p.key }}">{{ p.name }}</label>
+                <input id="weight-{{ p.key }}" name="weight::{{ p.key }}" type="number" step="0.05" min="0" max="10"
+                       value="{{ p.weight }}" required>
+            {% endfor %}
+        </div>
+        <button type="submit" class="button inline primary">Save weights</button>
+    </form>
+</section>
+
+<section class="panel" id="pricing">
+    <h2>Model pricing</h2>
+    <p class="subtitle">USD per 1,000,000 tokens, from each provider's pricing page; used to estimate API spend.
+        Leave a price blank if unknown -- its calls are recorded with an unknown cost rather than $0.</p>
+    {{ section_status("pricing") }}
+    <form class="settings-form" method="post" action="/settings/pricing">
+        <table class="settings-table">
+            <thead><tr><th>Model</th><th>Input $/1M</th><th>Output $/1M</th><th>Remove</th></tr></thead>
+            <tbody>
+                {% for row in s.pricing %}
+                <tr>
+                    <td><code>{{ row.model }}</code></td>
+                    <td><input name="input::{{ row.model }}" type="number" step="any" min="0" aria-label="{{ row.model }} input price"
+                               value="{{ '' if row.input is none else row.input }}"></td>
+                    <td><input name="output::{{ row.model }}" type="number" step="any" min="0" aria-label="{{ row.model }} output price"
+                               value="{{ '' if row.output is none else row.output }}"></td>
+                    <td><input name="delete::{{ row.model }}" type="checkbox" aria-label="Remove {{ row.model }}"></td>
+                </tr>
+                {% endfor %}
+                <tr>
+                    <td><input name="new_model" placeholder="Add a model" aria-label="New model name" maxlength="100" spellcheck="false"></td>
+                    <td><input name="new_input" type="number" step="any" min="0" aria-label="New model input price"></td>
+                    <td><input name="new_output" type="number" step="any" min="0" aria-label="New model output price"></td>
+                    <td></td>
+                </tr>
+            </tbody>
+        </table>
+        <button type="submit" class="button inline primary">Save pricing</button>
+    </form>
+</section>
+
+<section class="panel" id="leagues">
+    <h2>Leagues</h2>
+    <p class="subtitle">Which leagues the daily run logs, and each season's start dates. A blank date uses the
+        default shown in grey.</p>
+    {{ section_status("leagues") }}
+    <form class="settings-form" method="post" action="/settings/leagues">
+        {% for lg in s.leagues %}
+        <fieldset class="league-settings">
+            <legend>{{ lg.code }}</legend>
+            <label class="checkbox"><input type="checkbox" name="tracked::{{ lg.code }}" {% if lg.tracked %}checked{% endif %}>
+                Track daily</label>
+            <table class="settings-table">
+                <thead><tr><th>Season</th><th>Regular season starts</th><th>Postseason starts</th></tr></thead>
+                <tbody>
+                    {% for row in lg.seasons %}
+                    <tr>
+                        <td>{{ row.season }}</td>
+                        <td><input type="date" name="regular::{{ lg.code }}::{{ row.season }}" value="{{ row.regular }}"
+                                   aria-label="{{ lg.code }} {{ row.season }} regular season start">
+                            {% if not row.regular %}<span class="muted default-hint">default {{ row.regular_default }}</span>{% endif %}</td>
+                        <td><input type="date" name="postseason::{{ lg.code }}::{{ row.season }}" value="{{ row.postseason }}"
+                                   aria-label="{{ lg.code }} {{ row.season }} postseason start">
+                            {% if not row.postseason %}<span class="muted default-hint">default {{ row.postseason_default }}</span>{% endif %}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </fieldset>
+        {% endfor %}
+        <button type="submit" class="button inline primary">Save leagues</button>
+    </form>
+</section>
+
+{% endblock %}

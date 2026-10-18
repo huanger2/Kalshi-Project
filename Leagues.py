@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
+import ConfigFiles
 import DataDir
 
 CONFIG_PATH = Path(__file__).with_name("leagues.json")
@@ -111,7 +112,7 @@ def league_for_ticker(ticker: Optional[str]) -> Optional[str]:
 
 def load_config() -> dict:
     try:
-        return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        return json.loads(ConfigFiles.effective(CONFIG_PATH).read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {}
     except json.JSONDecodeError as e:

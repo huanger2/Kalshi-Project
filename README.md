@@ -273,6 +273,20 @@ This is a first framework pass, not a finished product: one admin login,
 no pagination, plain server-rendered pages. Treat it as the foundation to
 build the "look at different markets" experience on, not the end state.
 
+### Settings tab
+
+Signed in as admin, the **Settings** tab edits the JSON config files from
+the browser: each AI's model (`ai_settings.json`), each AI's weight
+(`ai_weights.json`), model pricing (`model_pricing.json`), and each league's
+tracking and season dates (`leagues.json`). A section with an invalid value
+shows why and saves nothing.
+
+Locally, saving edits the file itself. Hosted (`DATA_DIR` set), saving
+writes a copy of the file to the volume that overrides the deployed one, so
+it survives deploys. Edits to that file pushed from git then don't apply on
+the server until you click **Reset to repo version** (see
+[`ConfigFiles.py`](ConfigFiles.py)).
+
 ### Signing in
 
 The first page a visitor sees is a sign-in screen: sign in, or **Continue

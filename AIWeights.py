@@ -19,6 +19,8 @@ ai_settings.json, so an edit takes effect without restarting anything.
 import json
 from pathlib import Path
 
+import ConfigFiles
+
 WEIGHTS_PATH = Path(__file__).with_name("ai_weights.json")
 
 DEFAULT_WEIGHTS = {
@@ -37,7 +39,7 @@ def get_weight(llm_name: str) -> float:
     like AISettings.get_model().
     """
     try:
-        settings = json.loads(WEIGHTS_PATH.read_text(encoding="utf-8"))
+        settings = json.loads(ConfigFiles.effective(WEIGHTS_PATH).read_text(encoding="utf-8"))
     except FileNotFoundError:
         return DEFAULT_WEIGHTS.get(llm_name.lower(), 1.0)
     except json.JSONDecodeError as e:

@@ -9,6 +9,8 @@ missing from the file (or a missing file) fall back to DEFAULT_MODELS.
 import json
 from pathlib import Path
 
+import ConfigFiles
+
 SETTINGS_PATH = Path(__file__).with_name("ai_settings.json")
 
 DEFAULT_MODELS = {
@@ -24,7 +26,7 @@ def get_model(provider: str) -> str:
         raise KeyError(f"Unknown AI provider {provider!r}; expected one of {sorted(DEFAULT_MODELS)}")
 
     try:
-        settings = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+        settings = json.loads(ConfigFiles.effective(SETTINGS_PATH).read_text(encoding="utf-8"))
     except FileNotFoundError:
         return DEFAULT_MODELS[provider]
     except json.JSONDecodeError as e:
