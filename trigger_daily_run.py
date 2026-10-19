@@ -25,6 +25,13 @@ import urllib.request
 
 POLL_SECONDS = 15
 TIMEOUT_SECONDS = 60 * 60  # a full slate is a few hundred AI calls; give it an hour
+HEARTBEAT_SECONDS = 5 * 60  # a "still running" line this often, so the cron's logs never look frozen
+
+
+def say(message: str) -> None:
+    # flush: Railway reads stdout from a pipe, where Python would otherwise
+    # hold lines back until exit -- a working run would look stuck.
+    print(message, flush=True)
 
 
 def _call(method: str, url: str, token: str) -> tuple[int, dict]:
@@ -44,40 +51,50 @@ def main(sleep=time.sleep, now=time.monotonic) -> int:
     base = os.environ.get("DAILY_RUN_URL", "").rstrip("/")
     token = os.environ.get("DAILY_RUN_TOKEN", "")
     if not base or not token:
-        print("DAILY_RUN_URL and DAILY_RUN_TOKEN must both be set on this service")
+        say("DAILY_RUN_URL and DAILY_RUN_TOKEN must both be set on this service")
         return 1
     endpoint = f"{base}/internal/daily-run"
 
-    code, body = _call("POST", endpoint, token)
+    say(f"asking {base} to start the daily run")
+    try:
+        code, body = _call("POST", endpoint, token)
+    except OSError as e:  # unreachable: a wrong DAILY_RUN_URL, or the webapp is down
+        say(f"could not reach {endpoint}: {e}")
+        return 1
     if code == 409:
-        print("a daily run was already in progress; waiting on that one")
+        say("a daily run was already in progress; waiting on that one")
     elif code != 202:
-        print(f"could not start the daily run: HTTP {code} {body.get('detail', body)}")
+        say(f"could not start the daily run: HTTP {code} {body.get('detail', body)}")
         return 1
     run_id = body.get("run_id")
-    print(f"started daily run #{run_id}")
+    say(f"started daily run #{run_id}")
 
-    deadline = now() + TIMEOUT_SECONDS
+    started = now()
+    deadline = started + TIMEOUT_SECONDS
+    next_heartbeat = started + HEARTBEAT_SECONDS
     while now() < deadline:
         sleep(POLL_SECONDS)
+        if now() >= next_heartbeat:
+            say(f"daily run #{run_id} still running ({int((now() - started) // 60)} min so far)")
+            next_heartbeat += HEARTBEAT_SECONDS
         try:
             code, status = _call("GET", endpoint, token)
         except OSError as e:  # e.g. the webapp mid-redeploy; keep trying until the deadline
-            print(f"status check failed ({e}); retrying")
+            say(f"status check failed ({e}); retrying")
             continue
         if code != 200:
-            print(f"status check failed: HTTP {code}; retrying")
+            say(f"status check failed: HTTP {code}; retrying")
             continue
         if status.get("run_id") != run_id:
-            print("the webapp restarted mid-run, so this run was lost; the next one will catch up")
+            say("the webapp restarted mid-run, so this run was lost; the next one will catch up")
             return 1
         if status["state"] == "done":
-            print(f"daily run #{run_id} done: settled {status['settled']} game(s), logged {status['logged']}")
+            say(f"daily run #{run_id} done: settled {status['settled']} game(s), logged {status['logged']}")
             return 0
         if status["state"] == "failed":
-            print(f"daily run #{run_id} failed: {status['error']} (details are in the webapp's logs)")
+            say(f"daily run #{run_id} failed: {status['error']} (details are in the webapp's logs)")
             return 1
-    print(f"gave up waiting after {TIMEOUT_SECONDS // 60} minutes; the run may still finish")
+    say(f"gave up waiting after {TIMEOUT_SECONDS // 60} minutes; the run may still finish")
     return 1
 
 

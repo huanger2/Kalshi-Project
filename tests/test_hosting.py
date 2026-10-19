@@ -242,6 +242,26 @@ class TriggerScriptTests(unittest.TestCase):
         code, _ = self.run_main([(202, {"run_id": 5}), (200, {"run_id": 0, "state": "idle"})])
         self.assertEqual(code, 1)
 
+    def test_an_unreachable_url_exits_nonzero(self):
+        code, calls = self.run_main([OSError("Name or service not known")])
+        self.assertEqual((code, len(calls)), (1, 1))
+
+    def test_a_long_run_logs_that_it_is_still_going(self):
+        clock = iter(range(0, 10_000, 15))  # each now() call: another poll interval later
+        lines = []
+        responses = [(202, {"run_id": 7})] + [(200, {"run_id": 7, "state": "running"})] * 30 +                     [(200, {"run_id": 7, "state": "done", "settled": 1, "logged": 2})]
+        with mock.patch.dict("os.environ", {"DAILY_RUN_URL": "https://app.example", "DAILY_RUN_TOKEN": "tok"}),              mock.patch.object(trigger_daily_run, "_call", side_effect=responses),              mock.patch("builtins.print", side_effect=lambda msg, **kw: lines.append((msg, kw))):
+            self.assertEqual(trigger_daily_run.main(sleep=lambda s: None, now=lambda: next(clock)), 0)
+        self.assertTrue(any("still running" in msg for msg, _ in lines))
+        self.assertTrue(all(kw.get("flush") for _, kw in lines))  # never held back in a pipe
+
+    def test_the_cron_services_config_runs_the_trigger_not_the_webapp(self):
+        # railway.json applies to every service from this repo and starts the webapp; a cron
+        # service started that way never exits, so it gets its own config file.
+        config = json.loads((Path(__file__).parent.parent / "railway.cron.json").read_text(encoding="utf-8"))
+        self.assertEqual(config["deploy"]["startCommand"], "python trigger_daily_run.py")
+        self.assertEqual(config["deploy"]["cronSchedule"], "0 14 * * *")
+
     def test_missing_settings(self):
         with mock.patch.dict("os.environ"):
             os.environ.pop("DAILY_RUN_URL", None)
