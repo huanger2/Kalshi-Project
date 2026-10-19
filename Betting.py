@@ -15,11 +15,23 @@ The side with the bigger edge gets a bet if it clears betting.json's rules
 When more games qualify in a day than max_daily_usd covers, the biggest
 edges get the money (see apply_daily_cap()).
 
-Only paper betting exists so far: a bet is recorded in predictions.db's
-bets table at the price it would have been bought at, plus Kalshi's fee,
-and nothing is sent to Kalshi. A bet's result isn't stored -- it follows
-from its game's outcome in the predictions table (see result()), which the
-daily run already settles, so bets never need a settle step of their own.
+betting.json's mode says where bets go:
+
+    paper  recorded in predictions.db's bets table at the price it would
+           have been bought at, plus Kalshi's fee; nothing is sent to Kalshi
+    demo   sent to Kalshi's test exchange (play money, KALSHI_DEMO_* keys)
+    live   sent to the real exchange (real money, KALSHI_API_KEY*)
+
+A demo or live bet is an immediate-or-cancel limit order at the price the
+rules were checked against (Kalshi.buy()), so it fills at that price or
+better, or partly, or not at all; what's recorded is what actually filled,
+at Kalshi's reported price and fee. Each mode's bets are kept apart (the
+daily cap and the one-bet-per-market rule are per mode).
+
+A bet's result isn't stored -- it follows from its game's outcome in the
+predictions table (see result()), which the daily run already settles, so
+bets never need a settle step of their own. Kalshi pays out real positions
+itself at settlement.
 
 betting.json is read fresh on every call, like the other config files, and
 goes through ConfigFiles, so the Betting tab's saves land on the volume
@@ -36,7 +48,8 @@ import ConfigFiles
 import Leagues
 
 BETTING_PATH = Path(__file__).with_name("betting.json")
-MODES = ["off", "paper"]
+MODES = ["off", "paper", "demo", "live"]
+TRADING_MODES = ["demo", "live"]  # the modes that send orders to Kalshi (Kalshi.TRADING_BASES)
 SEGMENTS = ["preseason", "regular", "postseason"]  # see SeasonType.segment()
 
 DEFAULTS = {
@@ -218,30 +231,62 @@ def candidate(
 
 def place(conn: sqlite3.Connection, candidates: list[dict], config: Optional[dict] = None) -> list[dict]:
     """
-    Record the candidates that fit under each day's cap, biggest edge first
+    Place the candidates that fit under each day's cap, biggest edge first
     (see apply_daily_cap()), counting bets earlier runs already placed that
-    day. Returns the bets placed.
+    day. Paper bets are just recorded; demo/live ones are sent to Kalshi
+    first (see send()), and only what fills is recorded. Returns the bets
+    placed.
     """
     config = config or load_config()
     kept, skipped = apply_daily_cap(
         candidates, config["max_daily_usd"], lambda game_date: spent_on(conn, game_date, config["mode"])
     )
-    now = datetime.datetime.now().isoformat(timespec="seconds")
+    placed = []
     for bet in kept:
+        if bet["mode"] in TRADING_MODES:
+            bet = send(bet)
+            if bet is None:
+                continue
         conn.execute(
             "INSERT INTO bets (created_at, mode, ticker, event_ticker, league, game_date, team, opponent, "
-            " side, price, count, cost, fee, ai_prob, edge) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (now, bet["mode"], bet["ticker"], bet["event_ticker"], bet["league"], bet["game_date"], bet["team"],
-             bet["opponent"], bet["side"], bet["price"], bet["count"], bet["cost"], bet["fee"], bet["ai_prob"],
-             bet["edge"]),
+            " side, price, count, cost, fee, ai_prob, edge, order_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (datetime.datetime.now().isoformat(timespec="seconds"), bet["mode"], bet["ticker"],
+             bet["event_ticker"], bet["league"], bet["game_date"], bet["team"], bet["opponent"], bet["side"],
+             bet["price"], bet["count"], bet["cost"], bet["fee"], bet["ai_prob"], bet["edge"], bet.get("order_id")),
         )
+        # One commit per bet: a real order already went through, so a crash
+        # on a later one mustn't lose the record of this one.
+        conn.commit()
+        placed.append(bet)
         print(f"{bet['mode']} bet on {bet['ticker']}: {bet['reason']}")
-    conn.commit()
     for bet in skipped:
         print(f"no bet on {bet['ticker']}: {bet['reason']}, but the ${config['max_daily_usd']:.2f} daily cap "
               f"went to bigger edges")
-    return kept
+    return placed
+
+
+def send(bet: dict) -> Optional[dict]:
+    """
+    Send a demo/live bet to Kalshi as an immediate-or-cancel buy at its
+    price or better. Returns the bet as filled (count, price, cost, fee and
+    edge from the fill, plus order_id), or None if nothing filled or Kalshi
+    refused -- either way the run goes on to the next bet.
+    """
+    import Kalshi
+
+    try:
+        fill = Kalshi.buy(bet["ticker"], bet["side"], bet["count"], bet["price"], env=bet["mode"])
+    except Exception as e:
+        print(f"{bet['mode']} order on {bet['ticker']} failed: {e}")
+        return None
+    if not fill["count"]:
+        print(f"no {bet['mode']} bet on {bet['ticker']}: nothing on offer at {bet['price']:.2f} or better any more")
+        return None
+    side_prob = bet["ai_prob"] if bet["side"] == "yes" else 1 - bet["ai_prob"]
+    reason = (f"{bet['side'].upper()} x{fill['count']} at {fill['price']:.2f}, edge {side_prob - fill['price']:+.1%}"
+              f" (order {fill['order_id']})")
+    return {**bet, **fill, "edge": side_prob - fill["price"], "reason": reason}
 
 
 def consider(conn: sqlite3.Connection, market: dict, predictions: list, prices: dict, game_date: str,

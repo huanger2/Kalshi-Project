@@ -7,7 +7,8 @@ and a what-if backtest that replays the rules over every settled game
 already logged, to help pick a threshold.
 
 A bet's P&L is derived at read time from its game's outcome in the
-predictions table (Betting.result()), so this module only reads.
+predictions table (Betting.result()), so this module only reads. Paper,
+demo and live bets are shown one mode at a time, never added together.
 """
 
 import sqlite3
@@ -16,6 +17,7 @@ from typing import Mapping, Optional
 import Betting
 import ConfigFiles
 import DataDir
+import Kalshi
 import Leagues
 from webapp import queries
 from webapp.settings import SettingsError, _number
@@ -25,14 +27,15 @@ EDGE_BUCKETS = [(0.0, 0.05, "Under 5 pts"), (0.05, 0.10, "5-10 pts"), (0.10, 0.1
                 (0.15, float("inf"), "15+ pts")]
 
 
-def list_bets(conn: sqlite3.Connection) -> list[dict]:
-    """Every bet, newest game first, with its result (status/payout/pnl) filled in."""
+def list_bets(conn: sqlite3.Connection, mode: Optional[str] = None) -> list[dict]:
+    """Every bet (or every `mode` bet), newest game first, with its result (status/payout/pnl) filled in."""
     rows = conn.execute(
         "SELECT b.id, b.created_at, b.mode, b.ticker, b.league, b.game_date, b.team, b.opponent, b.side, "
         "       b.price, b.count, b.cost, b.fee, b.ai_prob, b.edge, "
         "       (SELECT MAX(outcome) FROM predictions p WHERE p.ticker = b.ticker), "
         "       (SELECT MAX(tied) FROM predictions p WHERE p.ticker = b.ticker) "
-        "FROM bets b ORDER BY b.game_date DESC, b.id DESC"
+        "FROM bets b WHERE ? IS NULL OR b.mode = ? ORDER BY b.game_date DESC, b.id DESC",
+        (mode, mode),
     ).fetchall()
     keys = ["id", "created_at", "mode", "ticker", "league", "game_date", "team", "opponent", "side",
             "price", "count", "cost", "fee", "ai_prob", "edge"]
@@ -113,16 +116,37 @@ def backtest(conn: sqlite3.Connection, config: dict) -> list[dict]:
     return rows
 
 
-def view(conn: sqlite3.Connection) -> dict:
-    """Everything the Betting page shows."""
+def account(mode: str) -> dict:
+    """The Kalshi account a demo/live mode bets from: whether keys are set, and its cash balance."""
+    info = {"mode": mode, "credentials": Kalshi.has_credentials(mode), "balance": None, "error": None}
+    if info["credentials"]:
+        try:
+            info["balance"] = Kalshi.get_balance(mode)
+        except Exception as e:
+            info["error"] = str(e)
+    return info
+
+
+def view(conn: sqlite3.Connection, shown: Optional[str] = None) -> dict:
+    """
+    Everything the Betting page shows. `shown` picks whose bets the totals
+    and list cover ("paper", "demo" or "live"); by default the mode in effect.
+    """
     config = Betting.load_config()
-    bets = list_bets(conn)
+    with_bets = {row[0] for row in conn.execute("SELECT DISTINCT mode FROM bets")}
+    tabs = [m for m in Betting.MODES if m in with_bets or (m == config["mode"] and m != "off")]
+    if shown not in tabs:
+        shown = config["mode"] if config["mode"] in tabs else (tabs[0] if tabs else "paper")
+    bets = list_bets(conn, shown)
     settled_games = conn.execute(
         "SELECT COUNT(DISTINCT ticker) FROM predictions WHERE outcome IS NOT NULL"
     ).fetchone()[0]
     return {
         "config": config,
         "modes": Betting.MODES,
+        "shown": shown,
+        "tabs": tabs,
+        "account": account(config["mode"]) if config["mode"] in Betting.TRADING_MODES else None,
         "leagues": list(Leagues.LEAGUES),
         "segments": Betting.SEGMENTS,
         "hosted": bool(DataDir.data_dir()),
@@ -141,11 +165,20 @@ def save_config(form: Mapping) -> None:
     Validate the rules form and save betting.json; any invalid field raises
     SettingsError, saving nothing. Every field is a string except "leagues"
     and "segments", the lists of checked league codes and season segments.
+
+    Switching to live (real money) also needs "confirm_live" ticked, and
+    demo/live need that environment's Kalshi keys to be set.
     """
     errors: list[str] = []
     mode = form.get("mode", "")
     if mode not in Betting.MODES:
         errors.append(f"Mode: {mode!r} isn't one of {', '.join(Betting.MODES)}.")
+    elif mode in Betting.TRADING_MODES and not Kalshi.has_credentials(mode):
+        names = Kalshi.CREDENTIAL_VARS[mode]
+        errors.append(f"Mode: {mode} needs Kalshi keys -- set {names['key_id']} and {names['key']} "
+                      f"(or {names['key_path']}).")
+    elif mode == "live" and Betting.load_config()["mode"] != "live" and form.get("confirm_live") != "yes":
+        errors.append("Mode: tick the box confirming live bets spend real money.")
 
     def percent(name, label, maximum):
         value = _number(form.get(name, ""), label, errors, maximum=maximum, required=True)

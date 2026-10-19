@@ -402,19 +402,21 @@ def reset_settings(request: Request, section: str):
 # --- Admin betting tab: the auto-betting rules and how the bets did (see webapp/betting.py) ---
 
 def _render_betting(request: Request, conn: sqlite3.Connection, saved: Optional[str] = None,
-                    errors: Optional[list] = None, status_code: int = 200):
+                    errors: Optional[list] = None, status_code: int = 200, shown: Optional[str] = None):
     return templates.TemplateResponse(
         request, "betting.html",
-        {"b": betting.view(conn), "message": betting.flash(saved), "errors": errors or [],
+        {"b": betting.view(conn, shown), "message": betting.flash(saved), "errors": errors or [],
          "ai_names": DEFAULT_LLM_NAMES, "active_tab": "betting"},
         status_code=status_code,
     )
 
 
 @app.get("/betting", response_class=HTMLResponse)
-def betting_page(request: Request, saved: Optional[str] = None, conn: sqlite3.Connection = Depends(get_db)):
+def betting_page(request: Request, saved: Optional[str] = None, bets: Optional[str] = None,
+                 conn: sqlite3.Connection = Depends(get_db)):
+    """`bets` picks whose bets the page totals: paper, demo or live (default: the mode in effect)."""
     _require_admin(request)
-    return _render_betting(request, conn, saved=saved)
+    return _render_betting(request, conn, saved=saved, shown=bets)
 
 
 @app.post("/betting/rules", response_class=HTMLResponse)
@@ -429,13 +431,15 @@ def save_betting_rules(
     min_ais: str = Form(""),
     leagues: list[str] = Form([]),
     segments: list[str] = Form([]),
+    confirm_live: str = Form(""),
     conn: sqlite3.Connection = Depends(get_db),
 ):
     _require_admin(request)
     try:
         betting.save_config({"mode": mode, "min_edge": min_edge, "stake_usd": stake_usd,
                              "max_daily_usd": max_daily_usd, "min_price": min_price, "max_price": max_price,
-                             "min_ais": min_ais, "leagues": leagues, "segments": segments})
+                             "min_ais": min_ais, "leagues": leagues, "segments": segments,
+                             "confirm_live": confirm_live})
     except settings.SettingsError as e:
         return _render_betting(request, conn, errors=e.errors, status_code=400)
     return RedirectResponse("/betting?saved=rules#rules", status_code=303)

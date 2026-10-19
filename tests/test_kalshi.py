@@ -1,3 +1,4 @@
+import base64
 import datetime
 import importlib
 import os
@@ -96,28 +97,143 @@ class PaginationTests(unittest.TestCase):
         self.assertEqual(get.call_args_list[0].kwargs["series_ticker"], "KXNBAGAME")
 
 
+def _rsa_key():
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    return rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+
+def _pem(key, pkcs1=False) -> str:
+    from cryptography.hazmat.primitives import serialization
+    fmt = serialization.PrivateFormat.TraditionalOpenSSL if pkcs1 else serialization.PrivateFormat.PKCS8
+    return key.private_bytes(serialization.Encoding.PEM, fmt, serialization.NoEncryption()).decode()
+
+
+def _verify(key, headers, method, path):
+    """Raises unless headers carry a valid signature over timestamp + method + path."""
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import padding
+    msg = (headers["KALSHI-ACCESS-TIMESTAMP"] + method + path).encode()
+    key.public_key().verify(base64.b64decode(headers["KALSHI-ACCESS-SIGNATURE"]), msg,
+                            padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.DIGEST_LENGTH),
+                            hashes.SHA256())
+
+
+class PrivateKeyParsingTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.key = _rsa_key()
+
+    def same_key(self, parsed):
+        self.assertEqual(parsed.private_numbers(), self.key.private_numbers())
+
+    def test_plain_pem(self):
+        self.same_key(Kalshi.parse_private_key(_pem(self.key)))
+
+    def test_pkcs1_pem(self):
+        self.same_key(Kalshi.parse_private_key(_pem(self.key, pkcs1=True)))
+
+    def test_newlines_flattened_to_spaces(self):
+        # How a key pasted into a one-line .env value ends up.
+        self.same_key(Kalshi.parse_private_key(_pem(self.key).replace("\n", " ")))
+
+    def test_literal_backslash_n_and_quotes(self):
+        self.same_key(Kalshi.parse_private_key('"' + _pem(self.key).replace("\n", "\n") + '"'))
+
+    def test_bare_base64_body(self):
+        body = "".join(_pem(self.key).strip().splitlines()[1:-1])
+        self.same_key(Kalshi.parse_private_key(body))
+
+    def test_garbage_is_a_trading_error(self):
+        with self.assertRaises(Kalshi.TradingError):
+            Kalshi.parse_private_key("not a key")
+
+
 class AuthHeaderTests(unittest.TestCase):
-    """get_auth_headers() had no coverage before the whitespace-stripping fix."""
+    @classmethod
+    def setUpClass(cls):
+        cls.key = _rsa_key()
 
-    def test_bearer_key_builds_authorization_header(self):
-        with mock.patch.dict(os.environ, {"KALSHI_API_KEY": "secret", "KALSHI_API_KEY_ID": "key-id"}), \
-             mock.patch.object(Kalshi, "load_dotenv"):
-            headers = Kalshi.get_auth_headers("GET", "/markets")
-        self.assertEqual(headers, {"Authorization": "Bearer secret", "KALSHI-ACCESS-KEY": "key-id"})
+    def env(self, **values):
+        clean = {name: "" for names in Kalshi.CREDENTIAL_VARS.values() for name in names.values()}
+        return mock.patch.dict(os.environ, {**clean, **values})
 
-    def test_whitespace_is_stripped_from_the_key_and_key_id(self):
-        # Regression: a trailing newline (e.g. from a stale OS-level env var
-        # shadowing AIAPIKEYS.env) breaks the Authorization header outright.
-        with mock.patch.dict(os.environ, {"KALSHI_API_KEY": "secret\n\n", "KALSHI_API_KEY_ID": "key-id\n\n"}), \
+    def test_signs_with_the_key_from_the_env_var(self):
+        with self.env(KALSHI_API_KEY=_pem(self.key).replace("\n", " "), KALSHI_API_KEY_ID="key-id\n\n"), \
              mock.patch.object(Kalshi, "load_dotenv"):
-            headers = Kalshi.get_auth_headers("GET", "/markets")
-        self.assertEqual(headers, {"Authorization": "Bearer secret", "KALSHI-ACCESS-KEY": "key-id"})
+            headers = Kalshi.get_auth_headers("GET", "/trade-api/v2/portfolio/balance")
+        self.assertEqual(headers["KALSHI-ACCESS-KEY"], "key-id")  # whitespace stripped
+        _verify(self.key, headers, "GET", "/trade-api/v2/portfolio/balance")
+
+    def test_demo_uses_its_own_keys(self):
+        with self.env(KALSHI_API_KEY_ID="live-id", KALSHI_DEMO_API_KEY_ID="demo-id",
+                      KALSHI_DEMO_API_KEY=_pem(self.key)), mock.patch.object(Kalshi, "load_dotenv"):
+            headers = Kalshi.get_auth_headers("POST", "/x", env="demo")
+            self.assertTrue(Kalshi.has_credentials("demo"))
+        self.assertEqual(headers["KALSHI-ACCESS-KEY"], "demo-id")
+
+    def test_missing_keys(self):
+        with self.env(), mock.patch.object(Kalshi, "load_dotenv"), mock.patch("os.path.isfile", return_value=False):
+            self.assertFalse(Kalshi.has_credentials("live"))
+            self.assertFalse(Kalshi.has_credentials("demo"))
+            with self.assertRaises(Kalshi.TradingError):
+                Kalshi.get_auth_headers("GET", "/x", env="demo")
 
     def test_env_var_is_loaded_with_override_so_a_stale_os_value_cannot_win(self):
-        with mock.patch.object(Kalshi, "load_dotenv") as load_dotenv:
-            with mock.patch.dict(os.environ, {"KALSHI_API_KEY": "secret"}):
-                Kalshi.get_auth_headers("GET", "/markets")
+        with self.env(KALSHI_API_KEY_ID="id", KALSHI_API_KEY=_pem(self.key)), \
+             mock.patch.object(Kalshi, "load_dotenv") as load_dotenv:
+            Kalshi.get_auth_headers("GET", "/markets")
         load_dotenv.assert_called_once_with("AIAPIKEYS.env", override=True)
+
+
+class TradingTests(unittest.TestCase):
+    """get_balance() / buy() against a faked Kalshi: what's sent, and how the reply is read."""
+
+    def setUp(self):
+        patcher = mock.patch.object(Kalshi, "get_auth_headers", return_value={"KALSHI-ACCESS-KEY": "k"})
+        self.auth = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def reply(self, body, status=200):
+        response = mock.Mock(status_code=status)
+        response.json.return_value = body
+        return mock.patch("requests.request", return_value=response)
+
+    def test_balance(self):
+        with self.reply({"balance": 12345, "balance_dollars": "123.4500"}) as request:
+            self.assertEqual(Kalshi.get_balance("demo"), 123.45)
+        self.assertEqual(request.call_args.args[:2], ("GET", "https://demo-api.kalshi.co/trade-api/v2/portfolio/balance"))
+        # The signature covers the full path from the root.
+        self.auth.assert_called_once_with("GET", "/trade-api/v2/portfolio/balance", env="demo")
+
+    def test_buying_yes_is_a_bid_at_the_yes_price(self):
+        with self.reply({"order_id": "o1", "fill_count": "8.00", "remaining_count": "0.00",
+                         "average_fill_price": "0.6100", "average_fee_paid": "0.0167"}) as request:
+            fill = Kalshi.buy("KXNBAGAME-X-DEN", "yes", 8, 0.62, env="live", client_order_id="c1")
+        method, url = request.call_args.args[:2]
+        self.assertEqual((method, url), ("POST", Kalshi.BASE + "/portfolio/events/orders"))
+        self.assertEqual(request.call_args.kwargs["json"], {
+            "ticker": "KXNBAGAME-X-DEN", "side": "bid", "count": "8", "price": "0.6200",
+            "time_in_force": "immediate_or_cancel", "self_trade_prevention_type": "taker_at_cross",
+            "client_order_id": "c1"})
+        self.assertEqual(fill, {"order_id": "o1", "count": 8, "price": 0.61, "cost": 4.88, "fee": 0.14})
+
+    def test_buying_no_is_an_ask_on_the_yes_leg(self):
+        # NO at 40 cents is selling YES at 60; the fill comes back on the YES leg too.
+        with self.reply({"order_id": "o2", "fill_count": "5", "average_fill_price": "0.6100",
+                         "average_fee_paid": "0.0167"}) as request:
+            fill = Kalshi.buy("T", "no", 12, 0.40, env="demo")
+        body = request.call_args.kwargs["json"]
+        self.assertEqual((body["side"], body["price"], body["count"]), ("ask", "0.6000", "12"))
+        self.assertEqual((fill["count"], fill["price"], fill["cost"]), (5, 0.39, 1.95))
+
+    def test_nothing_filled(self):
+        with self.reply({"order_id": "o3", "fill_count": "0.00", "remaining_count": "0.00"}):
+            self.assertEqual(Kalshi.buy("T", "yes", 3, 0.5, env="demo")["count"], 0)
+
+    def test_a_refusal_raises_with_kalshis_message(self):
+        with self.reply({"error": {"code": "insufficient_balance"}}, status=400):
+            with self.assertRaisesRegex(Kalshi.TradingError, "insufficient_balance"):
+                Kalshi.buy("T", "yes", 3, 0.5, env="live")
 
 
 class ImportSideEffectTests(unittest.TestCase):

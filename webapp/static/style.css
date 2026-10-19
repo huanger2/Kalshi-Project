@@ -194,6 +194,11 @@ body {
 .tabs a.untracked.active { opacity: 1; }
 .tab-divider { flex: none; width: 1px; margin: 0.5rem 0.4rem; background: var(--border); }
 
+.mode-switch { display: flex; gap: 0.35rem; flex-wrap: wrap; margin: 0.75rem 0 0.25rem; }
+.mode-switch a { padding: 0.3rem 0.7rem; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); text-decoration: none; font-size: 0.85rem; font-weight: 600; }
+.mode-switch a:hover { color: var(--text); }
+.mode-switch a.active { color: var(--accent); border-color: var(--accent); }
+
 .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
 
 /* The league tab's tracking toggle: a button with role="switch". */

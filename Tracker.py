@@ -64,7 +64,7 @@ CREATE INDEX IF NOT EXISTS idx_predictions_event ON predictions (event_ticker);
 CREATE TABLE IF NOT EXISTS bets (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at     TEXT    NOT NULL,
-    mode           TEXT    NOT NULL,  -- "paper": recorded only, nothing sent to Kalshi
+    mode           TEXT    NOT NULL,  -- "paper" (recorded only), "demo" or "live" (sent to Kalshi)
     ticker         TEXT    NOT NULL,
     event_ticker   TEXT,
     league         TEXT,
@@ -77,7 +77,8 @@ CREATE TABLE IF NOT EXISTS bets (
     cost           REAL    NOT NULL,  -- price * count, USD
     fee            REAL    NOT NULL,  -- Kalshi's trading fee, USD
     ai_prob        REAL    NOT NULL,  -- the AIs' consensus YES probability
-    edge           REAL    NOT NULL   -- the bet side's AI probability minus price
+    edge           REAL    NOT NULL,  -- the bet side's AI probability minus price
+    order_id       TEXT               -- Kalshi's order id (demo/live only)
 );
 CREATE INDEX IF NOT EXISTS idx_bets_ticker ON bets (ticker);
 """
@@ -89,6 +90,7 @@ _MIGRATED_COLUMNS = {
     "team": "TEXT", "opponent": "TEXT", "game_date": "TEXT",
     "yes_bid": "REAL", "yes_ask": "REAL", "model": "TEXT", "league": "TEXT", "tied": "INTEGER",
 }
+_MIGRATED_BET_COLUMNS = {"order_id": "TEXT"}
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
@@ -98,6 +100,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     for column, sql_type in _MIGRATED_COLUMNS.items():
         if column not in existing:
             conn.execute(f"ALTER TABLE predictions ADD COLUMN {column} {sql_type}")
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(bets)")}
+    for column, sql_type in _MIGRATED_BET_COLUMNS.items():
+        if existing and column not in existing:  # (no table at all: nothing to migrate)
+            conn.execute(f"ALTER TABLE bets ADD COLUMN {column} {sql_type}")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_predictions_league ON predictions (league)")
 
     # Rows from before the league column existed: the ticker says which

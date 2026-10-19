@@ -13,21 +13,51 @@
 {%- endmacro %}
 
 {% block content %}
+{% set mode_names = {"off": "Off", "paper": "Paper", "demo": "Kalshi demo", "live": "Live"} %}
+{% set mode_options = {"off": "Off", "paper": "Paper (record bets, send nothing)",
+                       "demo": "Kalshi demo (test exchange, play money)", "live": "Live (real money on Kalshi)"} %}
 {% set c = b.config %}
 {% set s = b.summary %}
+{% set a = b.account %}
 
 <section class="panel">
     <div class="panel-head">
         <h1>Betting</h1>
-        <span class="pill {{ 'won' if c.mode == 'paper' else 'pending' }}">
-            {{ "Paper betting" if c.mode == "paper" else "Off" }}</span>
+        <span class="pill {{ {'paper': 'won', 'demo': 'neutral', 'live': 'lost'}.get(c.mode, 'pending') }}">
+            {{ {"paper": "Paper betting", "demo": "Kalshi demo", "live": "Live betting"}.get(c.mode, "Off") }}</span>
     </div>
     <p class="subtitle">
+        {% set edge_text = "%g" | format(c.min_edge * 100) %}
         {% if c.mode == "paper" %}Each daily run records a paper bet on every game where the AI odds beat the
-            price by {{ "%g" | format(c.min_edge * 100) }} points or more. Nothing is sent to Kalshi.
+            price by {{ edge_text }} points or more. Nothing is sent to Kalshi.
+        {% elif c.mode == "demo" %}Each daily run places an order on Kalshi's demo exchange (play money) for every game
+            where the AI odds beat the price by {{ edge_text }} points or more.
+        {% elif c.mode == "live" %}<strong>Each daily run places real-money orders on Kalshi</strong> for every game
+            where the AI odds beat the price by {{ edge_text }} points or more.
         {% else %}Betting is off: the daily run logs games without recording bets.{% endif %}
+        {% if c.mode in ["demo", "live"] %}Orders are immediate-or-cancel at the checked price or better, so a
+            price that has moved away gets a partial fill or none.{% endif %}
     </p>
+    {% if a %}
+    {% if not a.credentials %}
+        <p class="form-error" role="alert">No Kalshi {{ mode_names[a.mode] | lower }} keys are set, so orders will fail.
+            See the README's Betting section.</p>
+    {% elif a.error %}
+        <p class="form-error" role="alert">Couldn't reach the Kalshi {{ mode_names[a.mode] | lower }} account: {{ a.error }}</p>
+    {% endif %}
+    {% endif %}
+    {% if b.tabs | length > 1 %}
+    <nav class="mode-switch" aria-label="Whose bets to show">
+        {% for m in b.tabs %}
+        <a href="/betting?bets={{ m }}" {% if m == b.shown %}class="active" aria-current="true"{% endif %}>{{ mode_names[m] }} bets</a>
+        {% endfor %}
+    </nav>
+    {% endif %}
     <div class="stats-grid">
+        {% if a and a.balance is not none %}
+        <div class="stat"><span class="label">Kalshi {{ "demo " if a.mode == "demo" }}balance</span>
+            <span class="value">{{ money(a.balance) }}</span><span class="sub">available cash</span></div>
+        {% endif %}
         <div class="stat"><span class="label">Bets</span><span class="value">{{ s.bets }}</span>
             <span class="sub">{{ s.pending }} pending</span></div>
         <div class="stat"><span class="label">Staked</span><span class="value">{{ money(s.staked) }}</span>
@@ -64,9 +94,14 @@
             <label for="mode">Mode</label>
             <select id="mode" name="mode" class="settings-select">
                 {% for m in b.modes %}
-                <option value="{{ m }}" {% if m == c.mode %}selected{% endif %}>{{ "Paper (record bets, send nothing)" if m == "paper" else "Off" }}</option>
+                <option value="{{ m }}" {% if m == c.mode %}selected{% endif %}>{{ mode_options[m] }}</option>
                 {% endfor %}
             </select>
+            {% if c.mode != "live" %}
+            <span class="settings-label"></span>
+            <label class="checkbox"><input type="checkbox" name="confirm_live" value="yes">
+                Live bets spend real money (needed to switch to Live)</label>
+            {% endif %}
             <label for="min_edge">Minimum edge (points)</label>
             <input id="min_edge" name="min_edge" type="number" step="0.5" min="0" max="50" value="{{ '%g' | format(c.min_edge * 100) }}" required>
             <label for="stake_usd">Dollars per bet</label>
@@ -146,7 +181,7 @@
 <section class="panel" id="bets">
     <h2>Bets</h2>
     {% if not s.bets %}
-        <p class="empty">No bets yet{% if c.mode == "paper" %} -- the next daily run records them{% endif %}.</p>
+        <p class="empty">No {{ mode_names[b.shown] | lower }} bets yet{% if c.mode == b.shown %} -- the next daily run places them{% endif %}.</p>
     {% else %}
     <div class="table-scroll">
     <table>

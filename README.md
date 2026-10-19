@@ -13,7 +13,7 @@ Requires Python 3.10+.
 pip install requests python-dotenv pandas openpyxl openai google-genai fastapi uvicorn jinja2 python-multipart
 ```
 
-Optional: `cryptography` (only for Kalshi's authenticated endpoints).
+Optional: `cryptography` (only for demo/live betting, which signs Kalshi requests).
 
 Put your API keys in `AIAPIKEYS.env` in the project folder. It is gitignored,
 so it is never committed.
@@ -24,7 +24,8 @@ OPENAI_API_KEY=...
 GEMINI_API_KEY=...
 ```
 
-Kalshi market data is public, so the daily log needs no Kalshi key.
+Kalshi market data is public, so the daily log needs no Kalshi key. Only
+demo and live betting do (see the Betting tab below).
 
 ## Choosing the AI models
 
@@ -302,12 +303,41 @@ answer from memory. If it still answers a part without searching, the page
 flags that part as unverified. One click takes about two minutes and makes
 four Gemini calls, logged in API spend; Google bills web search separately.
 
-### Betting tab (paper betting)
+### Betting tab
 
 Signed in as admin, the **Betting** tab sets the rules for automatic bets
 (`betting.json`, see [`Betting.py`](Betting.py)) and shows how they've done.
-**Only paper betting exists so far: bets are recorded, and nothing is sent
-to Kalshi.**
+The mode says where bets go:
+
+| Mode | |
+|---|---|
+| Off | no bets |
+| Paper | bets are recorded at the price they'd have cost; nothing is sent to Kalshi |
+| Kalshi demo | orders go to [Kalshi's demo exchange](https://demo.kalshi.co), with play money |
+| Live | **real-money orders on Kalshi** |
+
+A demo or live bet is an immediate-or-cancel limit order at the price the
+rules were checked against. It fills at that price or better, partly, or
+not at all if the price has moved, and only what filled is recorded, at
+Kalshi's price and fee. Each mode's bets are counted separately (own daily
+cap, own totals; the tab switches between them), and Kalshi pays real
+positions out itself when the game settles.
+
+Demo and live each need their own Kalshi API key (the demo site issues
+separate keys). Create one under Account → API Keys, then put the key id
+and private key in `AIAPIKEYS.env` locally, or the service's Variables on
+Railway:
+
+| Variable | |
+|---|---|
+| `KALSHI_API_KEY_ID` / `KALSHI_API_KEY` | live: the key id, and the private key's PEM text (pasting it onto one line is fine) |
+| `KALSHI_PRIVATE_KEY_PATH` | live, instead of `KALSHI_API_KEY`: path to the `.key` file (default `kalshi.key`) |
+| `KALSHI_DEMO_API_KEY_ID` / `KALSHI_DEMO_API_KEY` | demo: the same, for the demo account |
+| `KALSHI_DEMO_PRIVATE_KEY_PATH` | demo, instead of `KALSHI_DEMO_API_KEY` |
+
+The rules can't be saved in demo or live mode without that mode's keys, and
+switching to live also needs its confirmation box ticked. The tab shows the
+account's cash balance. Try a few days on demo before going live.
 
 Each time the daily run logs a game, it compares the AI odds (the same
 weighted consensus as the "AI odds" column) with what a contract costs right

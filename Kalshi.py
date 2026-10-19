@@ -1,8 +1,12 @@
 import base64
 import datetime
+import math
 import os
 import re
+import textwrap
+import uuid
 from typing import Optional
+from urllib.parse import urlparse
 
 import requests
 from dotenv import load_dotenv
@@ -10,6 +14,25 @@ from dotenv import load_dotenv
 import Leagues
 
 BASE = "https://api.elections.kalshi.com/trade-api/v2"
+
+# Where orders go. "demo" is Kalshi's test exchange (demo.kalshi.co): play
+# money, its own account and its own API keys. "live" is the real exchange.
+TRADING_BASES = {
+    "live": BASE,
+    "demo": "https://demo-api.kalshi.co/trade-api/v2",
+}
+
+# Each environment's credentials: an API key id plus its RSA private key,
+# given either as the PEM text itself or as a path to the .key file.
+CREDENTIAL_VARS = {
+    "live": {"key_id": "KALSHI_API_KEY_ID", "key": "KALSHI_API_KEY", "key_path": "KALSHI_PRIVATE_KEY_PATH"},
+    "demo": {"key_id": "KALSHI_DEMO_API_KEY_ID", "key": "KALSHI_DEMO_API_KEY",
+             "key_path": "KALSHI_DEMO_PRIVATE_KEY_PATH"},
+}
+
+
+class TradingError(Exception):
+    """Kalshi refused an authenticated request, or credentials are missing."""
 
 # Each league's per-game winner series (one binary market per team in each
 # game, e.g. KXNBAGAME) lives in Leagues.py. Not to be confused with the
@@ -21,21 +44,34 @@ BASE = "https://api.elections.kalshi.com/trade-api/v2"
 # ---------------------------------------------------------------------------
 
 def load_private_key(file_path):
-    from cryptography.hazmat.primitives import serialization
-    from cryptography.hazmat.backends import default_backend
-
     with open(file_path, "rb") as f:
-        return serialization.load_pem_private_key(f.read(), password=None, backend=default_backend())
+        return parse_private_key(f.read().decode("utf-8"))
 
 
-def sign_request(private_key, method, path, api_key=None, key_id=None):
-    """Build Kalshi auth headers, using a bearer key if given, else an RSA signature."""
-    if api_key:
-        headers = {"Authorization": f"Bearer {api_key}"}
-        if key_id:
-            headers["KALSHI-ACCESS-KEY"] = key_id
-        return headers
+def parse_private_key(text: str):
+    """
+    An RSA private key from its PEM text, however an env var mangled it:
+    surrounding quotes, literal "\\n"s, or the newlines flattened to spaces
+    (pasting a key into a one-line .env value or Railway's variable editor).
+    A bare base64 body with no BEGIN/END lines is read as PKCS#8, then PKCS#1.
+    """
+    from cryptography.hazmat.primitives import serialization
 
+    text = text.strip().strip('"').strip("'").replace("\\n", "\n")
+    match = re.search(r"-----BEGIN ([A-Z ]+)-----(.*?)-----END \1-----", text, re.S)
+    labels, body = ([match.group(1)], match.group(2)) if match else (["PRIVATE KEY", "RSA PRIVATE KEY"], text)
+    body = "\n".join(textwrap.wrap(re.sub(r"\s+", "", body), 64))
+    for label in labels:
+        pem = f"-----BEGIN {label}-----\n{body}\n-----END {label}-----\n".encode()
+        try:
+            return serialization.load_pem_private_key(pem, password=None)
+        except ValueError:
+            continue
+    raise TradingError("the Kalshi private key isn't a readable PEM key")
+
+
+def sign_request(private_key, method, path, key_id=None):
+    """Kalshi auth headers: an RSA-PSS signature over timestamp + method + path (no query)."""
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.asymmetric import padding
 
@@ -55,21 +91,113 @@ def sign_request(private_key, method, path, api_key=None, key_id=None):
     }
 
 
-def get_auth_headers(method, path):
-    """Load credentials from AIAPIKEYS.env lazily and return auth headers."""
+def _env(name: str) -> Optional[str]:
+    # .strip(): trailing whitespace/newlines (a stray OS env var, or a
+    # copy-paste artifact in the .env file) break the auth header outright.
+    value = os.getenv(name) or os.getenv(name.lower())
+    return value.strip() if value and value.strip() else None
+
+
+def _load_env_files() -> None:
     # override=True: AIAPIKEYS.env must win over a stale OS-level env var of
     # the same name, which load_dotenv() otherwise silently leaves in place.
     load_dotenv("AIAPIKEYS.env", override=True)
-    # .strip(): a key with trailing whitespace/newlines (a stray OS env var, or
-    # a copy-paste artifact in the .env file) breaks the auth header outright.
-    api_key = os.getenv("kalshi_api_key") or os.getenv("KALSHI_API_KEY")
-    api_key = api_key.strip() if api_key else api_key
-    key_id = os.getenv("kalshi_api_key_id") or os.getenv("KALSHI_API_KEY_ID")
-    key_id = key_id.strip() if key_id else key_id
-    private_key = None
-    if not api_key:
-        private_key = load_private_key(os.getenv("KALSHI_PRIVATE_KEY_PATH", "kalshi.key"))
-    return sign_request(private_key, method, path, api_key=api_key, key_id=key_id)
+
+
+def has_credentials(env: str = "live") -> bool:
+    """Whether `env`'s key id and private key are configured (not whether Kalshi accepts them)."""
+    _load_env_files()
+    names = CREDENTIAL_VARS[env]
+    if not _env(names["key_id"]):
+        return False
+    return bool(_env(names["key"])) or os.path.isfile(_env(names["key_path"]) or ("kalshi.key" if env == "live" else ""))
+
+
+def get_auth_headers(method, path, env: str = "live"):
+    """Load `env`'s credentials from AIAPIKEYS.env / the environment and sign one request."""
+    _load_env_files()
+    names = CREDENTIAL_VARS[env]
+    key_id = _env(names["key_id"])
+    if not key_id:
+        raise TradingError(f"{names['key_id']} isn't set")
+    key_text = _env(names["key"])
+    if key_text:
+        private_key = parse_private_key(key_text)
+    else:
+        key_path = _env(names["key_path"]) or ("kalshi.key" if env == "live" else None)
+        if not key_path or not os.path.isfile(key_path):
+            raise TradingError(f"set {names['key']} (the private key's text) or {names['key_path']}")
+        private_key = load_private_key(key_path)
+    return sign_request(private_key, method, path, key_id=key_id)
+
+
+def _trade_request(method: str, endpoint: str, env: str, body: Optional[dict] = None) -> dict:
+    """An authenticated call to `env`'s exchange. Raises TradingError with Kalshi's message on a refusal."""
+    if env not in TRADING_BASES:
+        raise TradingError(f"unknown Kalshi environment {env!r}")
+    url = TRADING_BASES[env] + endpoint
+    # Kalshi signs the full path from the root: /trade-api/v2/portfolio/...
+    headers = get_auth_headers(method, urlparse(url).path, env=env)
+    response = requests.request(method, url, headers=headers, json=body, timeout=30)
+    if response.status_code >= 400:
+        try:
+            detail = response.json().get("error") or response.json()
+        except ValueError:
+            detail = response.text[:300]
+        raise TradingError(f"Kalshi {env} {method} {endpoint}: HTTP {response.status_code} {detail}")
+    return response.json()
+
+
+def get_balance(env: str = "live") -> float:
+    """Available cash in `env`'s account, in dollars."""
+    data = _trade_request("GET", "/portfolio/balance", env)
+    if data.get("balance_dollars") not in (None, ""):
+        return float(data["balance_dollars"])
+    return data["balance"] / 100.0
+
+
+def buy(ticker: str, side: str, count: int, price: float, env: str,
+        client_order_id: Optional[str] = None) -> dict:
+    """
+    Buy up to `count` contracts on `side` ("yes"/"no") at `price` (0-1) or
+    better, filling what the book has right now and cancelling the rest
+    (immediate-or-cancel), so a price that moved since it was quoted never
+    buys at a worse one.
+
+    Kalshi's order API prices everything on the YES leg: buying YES is a bid
+    at the YES price, buying NO an ask at 1 - the NO price, and fills come
+    back on that scale too.
+
+    Returns {"order_id", "count" (contracts filled, 0 if none), "price"
+    (average paid per contract, on `side`'s scale), "cost", "fee"}.
+    """
+    if side not in ("yes", "no"):
+        raise ValueError(f"side must be 'yes' or 'no', not {side!r}")
+    yes_leg = price if side == "yes" else 1 - price
+    body = {
+        "ticker": ticker,
+        "side": "bid" if side == "yes" else "ask",
+        "count": str(int(count)),
+        "price": f"{yes_leg:.4f}",
+        "time_in_force": "immediate_or_cancel",
+        "self_trade_prevention_type": "taker_at_cross",
+        "client_order_id": client_order_id or str(uuid.uuid4()),
+    }
+    data = _trade_request("POST", "/portfolio/events/orders", env, body)
+    filled = float(data.get("fill_count") or 0)
+    filled = int(filled) if filled.is_integer() else filled
+    if not filled:
+        return {"order_id": data.get("order_id"), "count": 0, "price": price, "cost": 0.0, "fee": 0.0}
+    avg = float(data.get("average_fill_price") or yes_leg)
+    paid = avg if side == "yes" else 1 - avg
+    fee = float(data.get("average_fee_paid") or 0) * filled
+    return {
+        "order_id": data.get("order_id"),
+        "count": filled,
+        "price": round(paid, 4),
+        "cost": round(paid * filled, 4),
+        "fee": math.ceil(fee * 100 - 1e-9) / 100,
+    }
 
 
 # ---------------------------------------------------------------------------

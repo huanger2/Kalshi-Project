@@ -1,4 +1,4 @@
-"""Paper betting (Betting.py), its hook in the daily run, and the Betting tab (webapp/betting.py)."""
+"""Paper, demo and live betting (Betting.py), its hook in the daily run, and the Betting tab (webapp/betting.py)."""
 
 import json
 import os
@@ -225,6 +225,58 @@ class DailyRunBettingTests(DailyLogTestCase):
         finally:
             conn.close()
 
+    def assert_sent_and_recorded_as_filled(self, mode):
+        self.set_rules(mode=mode, min_edge=0.02)
+        # A partial fill a cent better than the 62-cent ask the rules were checked against.
+        fill = {"order_id": f"{mode}-1", "count": 6, "price": 0.61, "cost": 3.66, "fee": 0.06}
+        with mock.patch("Kalshi.buy", return_value=fill) as buy:
+            self.run_day(OCT4, TODAY_MARKETS[:2])
+        buy.assert_called_once_with("KXNBAGAME-26OCT04UTADEN-DEN", "yes", 8, 0.62, env=mode)
+        conn = Tracker.connect(self.db_path)
+        try:
+            row = conn.execute("SELECT mode, count, price, cost, fee, order_id, edge FROM bets").fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(row[:6], (mode, 6, 0.61, 3.66, 0.06, f"{mode}-1"))
+        self.assertAlmostEqual(row[6], 0.0347, places=3)  # the edge at the price actually paid
+
+    def test_demo_bets_are_sent_to_kalshi_and_recorded_as_filled(self):
+        self.assert_sent_and_recorded_as_filled("demo")
+
+    def test_live_bets_are_sent_to_kalshi_and_recorded_as_filled(self):
+        self.assert_sent_and_recorded_as_filled("live")
+
+    def test_paper_bets_never_reach_kalshi(self):
+        with mock.patch("Kalshi.buy", side_effect=AssertionError("sent a paper bet")):
+            self.run_day(OCT4, TODAY_MARKETS[:2])
+        self.assertEqual(len(self.bets()), 1)
+
+    def test_an_order_that_fills_nothing_or_fails_records_no_bet(self):
+        self.set_rules(mode="demo", min_edge=0.02)
+        nothing = {"order_id": "o", "count": 0, "price": 0.62, "cost": 0.0, "fee": 0.0}
+        for result in ({"return_value": nothing}, {"side_effect": RuntimeError("HTTP 400 insufficient_balance")}):
+            with self.subTest(**{k: str(v) for k, v in result.items()}), mock.patch("Kalshi.buy", **result):
+                sheet = self.run_day(OCT4, TODAY_MARKETS[:2])
+                self.assertEqual(len(sheet), 1)  # the game is still logged
+                self.assertEqual(self.bets(), [])
+
+    def test_each_mode_has_its_own_cap_and_markets(self):
+        # A paper bet using up all of a $6 cap doesn't stop a demo bet on the same market.
+        conn = Tracker.connect(self.db_path)
+        try:
+            market = game_market("KXNBAGAME-26OCT04UTADEN-DEN", "Denver", ask="0.50")
+            preds = [LLMPrediction("OpenAI", 0.8, 1.0), LLMPrediction("Claude", 0.8, 1.0)]
+            prices = {"yes_ask": 0.50, "no_ask": 0.52}
+            fill = {"order_id": "o", "count": 10, "price": 0.50, "cost": 5.0, "fee": 0.18}
+            with mock.patch("builtins.print"), mock.patch("Kalshi.buy", return_value=fill) as buy:
+                for mode in ("paper", "demo"):
+                    rules = {**RULES, "mode": mode, "max_daily_usd": 6.0}
+                    self.assertIsNotNone(Betting.consider(conn, market, preds, prices, "2026-10-04", config=rules))
+        finally:
+            conn.close()
+        self.assertEqual(buy.call_count, 1)
+        self.assertEqual([b[1] for b in self.bets()], ["paper", "demo"])
+
 
 def _seed(db_path, games, bets=()):
     """games: (ticker, league, yes_bid, yes_ask, ai_prob, outcome, tied); bets: (ticker, side, price, count)."""
@@ -371,6 +423,43 @@ class BettingPageTests(BettingConfigTestCase):
         for text in ("Mode:", "lowest price", "Dollars per bet"):
             self.assertIn(text, r.text)
         self.assertEqual(self.config_path.read_text(), before)
+
+    def test_live_needs_its_box_ticked_and_demo_or_live_need_keys(self):
+        self.sign_in()
+        before = self.config_path.read_text()
+        with mock.patch("Kalshi.has_credentials", return_value=True):
+            r = self.client.post("/betting/rules", data=self.valid_form(mode="live"))
+            self.assertEqual(r.status_code, 400)
+            self.assertIn("real money", r.text)
+            self.assertEqual(self.config_path.read_text(), before)
+            self.client.post("/betting/rules", data=self.valid_form(mode="live", confirm_live="yes"))
+            self.assertEqual(json.loads(self.config_path.read_text())["mode"], "live")
+        with mock.patch("Kalshi.has_credentials", return_value=False):
+            r = self.client.post("/betting/rules", data=self.valid_form(mode="demo"))
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("KALSHI_DEMO_API_KEY_ID", r.text)
+
+    def test_demo_mode_shows_the_balance_and_keeps_each_modes_bets_apart(self):
+        self.config_path.write_text(json.dumps({**RULES, "mode": "demo"}), encoding="utf-8")
+        self.sign_in()
+        with mock.patch("Kalshi.has_credentials", return_value=True), \
+             mock.patch("Kalshi.get_balance", return_value=250.5):
+            page = self.client.get("/betting").text
+            self.assertIn("$250.50", page)
+            self.assertIn("Kalshi demo", page)
+            self.assertIn("No kalshi demo bets yet", page)  # the paper bet isn't counted as demo
+            self.assertNotIn("Home vs Away", page)
+            self.assertIn('href="/betting?bets=paper"', page)
+            self.assertIn("Home vs Away", self.client.get("/betting?bets=paper").text)
+
+    def test_a_balance_failure_is_shown_not_raised(self):
+        self.config_path.write_text(json.dumps({**RULES, "mode": "live"}), encoding="utf-8")
+        self.sign_in()
+        with mock.patch("Kalshi.has_credentials", return_value=True), \
+             mock.patch("Kalshi.get_balance", side_effect=RuntimeError("HTTP 401")):
+            r = self.client.get("/betting")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("HTTP 401", r.text)
 
     def test_hosted_saves_go_to_the_volume(self):
         volume = self.dir / "volume"

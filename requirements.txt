@@ -9,6 +9,7 @@ pandas==3.0.3
 openpyxl==3.1.5
 requests==2.34.2
 python-dotenv==1.2.2
+cryptography==48.0.0  # signs Kalshi's order/balance requests (demo and live betting)
 
 # AI APIs (ClaudeAi.py also goes through the openai client)
 openai==2.42.0
