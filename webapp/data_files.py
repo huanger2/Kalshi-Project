@@ -9,6 +9,11 @@ history from another machine), and daily log spreadsheets.
 Every path is read at call time from the module that owns it (Tracker,
 DailyLog, CostExport), so DATA_DIR (see DataDir.py) applies here exactly as
 it does to the daily run itself.
+
+predictions.db also holds the accounts (Accounts.py): users, their
+settings and their encrypted Kalshi keys. A download leaves those tables
+out (sanitized_db_copy()), and an uploaded replacement keeps the server's
+own accounts rather than whatever the upload had.
 """
 
 import datetime
@@ -66,6 +71,52 @@ class UploadError(ValueError):
     """An upload that was rejected; the message is shown to the admin."""
 
 
+def sanitized_db_copy(path: str) -> None:
+    """
+    Write predictions.db to `path` without the account tables -- the
+    download is for the game history, and shouldn't carry anyone's password
+    hash or (even encrypted) Kalshi key.
+    """
+    import Accounts
+
+    source = sqlite3.connect(db_path())
+    target = sqlite3.connect(path)
+    try:
+        source.backup(target)
+        for table in Accounts.ACCOUNT_TABLES:
+            target.execute(f"DROP TABLE IF EXISTS {table}")
+        target.commit()
+        target.execute("VACUUM")
+    finally:
+        source.close()
+        target.close()
+
+
+def _carry_over_accounts(conn: sqlite3.Connection, current: str) -> None:
+    """
+    Copy the server's account tables from `current` (the database being
+    replaced) into the upload, replacing whatever it had: accounts belong to
+    this server, not to the file. Bets in the upload owned by a user id the
+    server doesn't have become unowned, and the first admin claims them.
+    """
+    import Accounts
+
+    conn.execute("ATTACH DATABASE ? AS old", (current,))
+    try:
+        old_tables = {row[0] for row in conn.execute("SELECT name FROM old.sqlite_master WHERE type = 'table'")}
+        for table in Accounts.ACCOUNT_TABLES:
+            conn.execute(f"DELETE FROM main.{table}")
+            if table in old_tables:
+                conn.execute(f"INSERT INTO main.{table} SELECT * FROM old.{table}")
+        conn.commit()
+    finally:
+        conn.execute("DETACH DATABASE old")
+    for table in ("bets", "balance_history"):
+        conn.execute(f"UPDATE {table} SET user_id = NULL WHERE user_id NOT IN (SELECT id FROM users)")
+    conn.commit()
+    Accounts.claim_unowned(conn)
+
+
 def replace_database(data: bytes, now: Optional[datetime.datetime] = None) -> dict:
     """
     Swap in an uploaded predictions.db. It must be a SQLite file with a
@@ -97,6 +148,8 @@ def replace_database(data: bytes, now: Optional[datetime.datetime] = None) -> di
         conn = Tracker.connect(tmp)  # applies any pending schema migrations
         try:
             rows = conn.execute("SELECT COUNT(*) FROM predictions").fetchone()[0]
+            if os.path.exists(target):
+                _carry_over_accounts(conn, target)
         finally:
             conn.close()
     except sqlite3.DatabaseError as e:

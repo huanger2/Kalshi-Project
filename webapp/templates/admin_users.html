@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}Users - AI vs Kalshi{% endblock %}
+{% block content %}
+
+<div class="panel-row narrow-first">
+<section class="panel" id="add">
+    <h1>Users</h1>
+    <p class="subtitle">Nobody signs up on their own: add someone here and send them their username and the temporary
+        password shown. They pick their own password the first time they sign in, then set up their own betting
+        rules, AI weights and Kalshi keys.</p>
+    {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+    {% if new_password %}
+        <div class="form-message temp-password" role="status">
+            {{ "Added" if new_password.created else "New temporary password for" }} <strong>{{ new_password.username }}</strong>.
+            Their temporary password is <code>{{ new_password.password }}</code> -- copy it now; it isn't shown again.
+        </div>
+    {% endif %}
+    <form class="settings-form" method="post" action="/admin/users">
+        <div class="settings-grid">
+            <label for="new-username">Username</label>
+            <input id="new-username" name="username" required minlength="3" maxlength="32" pattern="[A-Za-z0-9_.\-]+"
+                   autocomplete="off" spellcheck="false">
+            <span class="settings-label"></span>
+            <label class="checkbox"><input type="checkbox" name="is_admin" value="yes"> Admin (can change shared
+                settings, users and data)</label>
+        </div>
+        <button type="submit" class="button inline primary">Add user</button>
+    </form>
+</section>
+
+<section class="panel" id="list">
+    <h2>{{ users | length }} account{{ "" if users | length == 1 else "s" }}</h2>
+    <div class="table-scroll">
+    <table class="users">
+        <thead><tr><th>User</th><th>Role</th><th>Betting</th><th>Kalshi keys</th><th>Bets</th><th>Added</th><th></th></tr></thead>
+        <tbody>
+            {% for u in users %}
+            <tr>
+                <td><strong>{{ u.username }}</strong>{% if u.id == request.state.user.id %} <span class="pill neutral">you</span>{% endif %}
+                    {% if u.must_change_password %}<span class="pill pending" title="Hasn't replaced their temporary password yet">temp password</span>{% endif %}</td>
+                <td>{{ "Admin" if u.is_admin else "User" }}</td>
+                <td>{{ {"off": "Off", "paper": "Paper", "demo": "Kalshi demo", "live": "Live"}.get(u.mode, u.mode) }}</td>
+                <td>{{ u["keys"] | join(", ") or "none" }}</td>
+                <td>{{ u.bets }}</td>
+                <td>{{ u.created_at[:10] }}</td>
+                <td><div class="row-actions">
+                    {% if u.id != request.state.user.id %}
+                    <form method="post" action="/admin/users/{{ u.id }}/password"><button type="submit" class="link-button">Reset password</button></form>
+                    <form method="post" action="/admin/users/{{ u.id }}/admin">
+                        <input type="hidden" name="is_admin" value="{{ '' if u.is_admin else 'yes' }}">
+                        <button type="submit" class="link-button">{{ "Remove admin" if u.is_admin else "Make admin" }}</button>
+                    </form>
+                    <form method="post" action="/admin/users/{{ u.id }}/delete"
+                          onsubmit="return confirm('Remove {{ u.username }}? Their settings and Kalshi keys are deleted; their bets stay in the history.');">
+                        <button type="submit" class="link-button danger">Remove</button>
+                    </form>
+                    {% else %}<span class="muted">change your password on Settings</span>{% endif %}
+                </div></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+</section>
+</div>
+
+{% endblock %}

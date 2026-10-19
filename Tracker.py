@@ -78,7 +78,8 @@ CREATE TABLE IF NOT EXISTS bets (
     fee            REAL    NOT NULL,  -- Kalshi's trading fee, USD
     ai_prob        REAL    NOT NULL,  -- the AIs' consensus YES probability
     edge           REAL    NOT NULL,  -- the bet side's AI probability minus price
-    order_id       TEXT               -- Kalshi's order id (demo/live only)
+    order_id       TEXT,              -- Kalshi's order id (demo/live only)
+    user_id        INTEGER            -- whose bet (Accounts.py users.id)
 );
 CREATE INDEX IF NOT EXISTS idx_bets_ticker ON bets (ticker);
 
@@ -89,7 +90,8 @@ CREATE TABLE IF NOT EXISTS balance_history (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     recorded_at    TEXT    NOT NULL,  -- local time, ISO
     mode           TEXT    NOT NULL,  -- "demo" or "live"
-    balance        REAL    NOT NULL   -- available cash, USD
+    balance        REAL    NOT NULL,  -- available cash, USD
+    user_id        INTEGER            -- whose account (Accounts.py users.id)
 );
 CREATE INDEX IF NOT EXISTS idx_balance_history_mode ON balance_history (mode, recorded_at);
 """
@@ -101,7 +103,8 @@ _MIGRATED_COLUMNS = {
     "team": "TEXT", "opponent": "TEXT", "game_date": "TEXT",
     "yes_bid": "REAL", "yes_ask": "REAL", "model": "TEXT", "league": "TEXT", "tied": "INTEGER",
 }
-_MIGRATED_BET_COLUMNS = {"order_id": "TEXT"}
+_MIGRATED_BET_COLUMNS = {"order_id": "TEXT", "user_id": "INTEGER"}
+_MIGRATED_BALANCE_COLUMNS = {"user_id": "INTEGER"}
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
@@ -111,10 +114,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
     for column, sql_type in _MIGRATED_COLUMNS.items():
         if column not in existing:
             conn.execute(f"ALTER TABLE predictions ADD COLUMN {column} {sql_type}")
-    existing = {row[1] for row in conn.execute("PRAGMA table_info(bets)")}
-    for column, sql_type in _MIGRATED_BET_COLUMNS.items():
-        if existing and column not in existing:  # (no table at all: nothing to migrate)
-            conn.execute(f"ALTER TABLE bets ADD COLUMN {column} {sql_type}")
+    for table, columns in (("bets", _MIGRATED_BET_COLUMNS), ("balance_history", _MIGRATED_BALANCE_COLUMNS)):
+        existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for column, sql_type in columns.items():
+            if existing and column not in existing:  # (no table at all: nothing to migrate)
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {sql_type}")
+    if {row[1] for row in conn.execute("PRAGMA table_info(bets)")} >= {"user_id"}:
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_bets_user ON bets (user_id, mode)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_predictions_league ON predictions (league)")
 
     # Rows from before the league column existed: the ticker says which
@@ -149,7 +155,10 @@ def connect(db_path: str = DEFAULT_DB) -> sqlite3.Connection:
     import SeasonType
 
     conn = sqlite3.connect(db_path)
+    import Accounts
+
     conn.executescript(SCHEMA)
+    conn.executescript(Accounts.SCHEMA)
     _migrate(conn)
     conn.commit()
     conn.create_function("segment", 2, SeasonType.segment_iso)

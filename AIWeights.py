@@ -12,12 +12,18 @@ regardless of an AI's actual skill, so a bad preseason Brier score doesn't
 mean much yet). This is a plain, directly editable number instead: every AI
 defaults to equal weighting (1.0) until you decide otherwise.
 
-Edit ai_weights.json to change one -- read fresh on every call, like
-ai_settings.json, so an edit takes effect without restarting anything.
+ai_weights.json holds the site-wide defaults (an admin edits them on the
+Admin tab): what guests see and what a user starts from. Each signed-in
+user can override them for themselves (for_user(), saved as their
+"ai_weights" setting -- see Accounts.py), and their own weights drive both
+the AI odds they're shown and the bets placed for them. The file is read
+fresh on every call, so an edit takes effect without restarting anything.
 """
 
 import json
+import sqlite3
 from pathlib import Path
+from typing import Optional
 
 import ConfigFiles
 
@@ -47,3 +53,29 @@ def get_weight(llm_name: str) -> float:
 
     weights = settings.get("weights", {})
     return weights.get(llm_name.lower(), DEFAULT_WEIGHTS.get(llm_name.lower(), 1.0))
+
+
+def defaults() -> dict[str, float]:
+    """The site-wide weight of every known AI (lower-case names)."""
+    return {name: get_weight(name) for name in DEFAULT_WEIGHTS}
+
+
+def for_user(conn: Optional[sqlite3.Connection], user_id: Optional[int]) -> dict[str, float]:
+    """
+    The weights in effect for one user: their own where they've set one,
+    the site-wide default otherwise. No user (a guest): the defaults.
+    """
+    import Accounts
+
+    weights = defaults()
+    if conn is not None and user_id is not None:
+        own = Accounts.get_setting(conn, user_id, "ai_weights") or {}
+        weights.update({k.lower(): float(v) for k, v in own.items()})
+    return weights
+
+
+def lookup(weights: Optional[dict[str, float]], llm_name: str) -> float:
+    """An AI's weight from a for_user()/defaults() dict (any capitalization), else the site default."""
+    if weights is None:
+        return get_weight(llm_name)
+    return weights.get(llm_name.lower(), get_weight(llm_name))

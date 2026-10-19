@@ -190,48 +190,48 @@ class SettingsPageTestCase(ConfigTestCase):
 class SettingsPageTests(SettingsPageTestCase):
     def test_guests_are_kept_out(self):
         self.client.post("/guest")
-        self.assertEqual(self.client.get("/settings").status_code, 403)
+        self.assertEqual(self.client.get("/admin/settings").status_code, 403)
         before = self.paths["ai_weights.json"].read_text(encoding="utf-8")
-        r = self.client.post("/settings/weights", data={"weight::openai": "9", "weight::claude": "1", "weight::gemini": "1"})
+        r = self.client.post("/admin/settings/weights", data={"weight::openai": "9", "weight::claude": "1", "weight::gemini": "1"})
         self.assertEqual(r.status_code, 403)
         self.assertEqual(self.paths["ai_weights.json"].read_text(encoding="utf-8"), before)
-        self.assertNotIn('href="/settings"', self.client.get("/").text)
+        self.assertNotIn('href="/admin/settings"', self.client.get("/").text)
 
     def test_admin_sees_every_section_and_the_tab(self):
         self.sign_in()
-        r = self.client.get("/settings")
+        r = self.client.get("/admin/settings")
         self.assertEqual(r.status_code, 200)
-        for section in ('id="models"', 'id="weights"', 'id="pricing"', 'id="leagues"', 'href="/settings"'):
+        for section in ('id="models"', 'id="weights"', 'id="pricing"', 'id="leagues"', 'href="/admin/settings"'):
             self.assertIn(section, r.text)
         self.assertIn('value="gpt-5.1"', r.text)
 
     def test_saving_redirects_back_with_a_confirmation(self):
         self.sign_in()
-        r = self.client.post("/settings/weights", data={"weight::openai": "2", "weight::claude": "1", "weight::gemini": "1"},
+        r = self.client.post("/admin/settings/weights", data={"weight::openai": "2", "weight::claude": "1", "weight::gemini": "1"},
                              follow_redirects=False)
-        self.assertEqual((r.status_code, r.headers["location"]), (303, "/settings?saved=weights#weights"))
+        self.assertEqual((r.status_code, r.headers["location"]), (303, "/admin/settings?saved=weights#weights"))
         self.assertIn("Saved.", self.client.get(r.headers["location"]).text)
         self.assertEqual(AIWeights.get_weight("openai"), 2.0)
 
     def test_an_invalid_save_shows_why_and_changes_nothing(self):
         self.sign_in()
-        r = self.client.post("/settings/weights", data={"weight::openai": "-3", "weight::claude": "1", "weight::gemini": "1"})
+        r = self.client.post("/admin/settings/weights", data={"weight::openai": "-3", "weight::claude": "1", "weight::gemini": "1"})
         self.assertEqual(r.status_code, 400)
         self.assertIn("Nothing was saved", r.text)
         self.assertEqual(AIWeights.get_weight("openai"), 1.0)
 
     def test_unknown_section_is_a_404(self):
         self.sign_in()
-        self.assertEqual(self.client.post("/settings/secrets", data={}).status_code, 404)
+        self.assertEqual(self.client.post("/admin/settings/secrets", data={}).status_code, 404)
 
     def test_hosted_reset_button(self):
         self.hosted()
         self.sign_in()
-        self.client.post("/settings/weights", data={"weight::openai": "2", "weight::claude": "1", "weight::gemini": "1"})
-        self.assertIn("Reset to repo version", self.client.get("/settings").text)
-        self.client.post("/settings/weights/reset")
+        self.client.post("/admin/settings/weights", data={"weight::openai": "2", "weight::claude": "1", "weight::gemini": "1"})
+        self.assertIn("Reset to repo version", self.client.get("/admin/settings").text)
+        self.client.post("/admin/settings/weights/reset")
         self.assertEqual(AIWeights.get_weight("openai"), 1.0)
-        self.assertNotIn("Reset to repo version", self.client.get("/settings").text)
+        self.assertNotIn("Reset to repo version", self.client.get("/admin/settings").text)
 
 
 if __name__ == "__main__":

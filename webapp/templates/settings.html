@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Settings - AI vs Kalshi{% endblock %}
+{% block title %}Shared settings - AI vs Kalshi{% endblock %}
 
 {% macro section_status(key) %}
     {% set f = s.files[key] %}
@@ -19,7 +19,7 @@
         {% endif %}
     </p>
     {% if s.hosted and f.override %}
-        <form id="reset-{{ key }}" method="post" action="/settings/{{ key }}/reset"></form>
+        <form id="reset-{{ key }}" method="post" action="/admin/settings/{{ key }}/reset"></form>
     {% endif %}
 {% endmacro %}
 
@@ -28,11 +28,11 @@
 <section class="panel" id="suggestions">
     <div class="panel-head">
         <div>
-            <h1>Settings</h1>
+            <h1>Shared settings</h1>
             <p class="subtitle">Ask Gemini (with Google Search) for the latest AI models, their prices, and announced
                 league dates. Nothing changes until you review and apply.</p>
         </div>
-        <form method="post" action="/settings/suggestions"
+        <form method="post" action="/admin/settings/suggestions"
               onsubmit="var b = this.querySelector('button'); b.disabled = true; b.textContent = 'Asking Gemini (up to a minute)…';">
             <button type="submit" class="button inline">Ask Gemini for updates</button>
         </form>
@@ -54,7 +54,7 @@
             <p class="form-message" role="status">Gemini found nothing to update: everything matches what it found
                 ({{ suggested.asked_at | replace("T", " ") }}).</p>
         {% else %}
-        <form method="post" action="/settings/suggestions/apply" class="settings-form">
+        <form method="post" action="/admin/settings/suggestions/apply" class="settings-form">
             <p class="note">Suggested {{ suggested.asked_at | replace("T", " ") }}. AI answers can be wrong -- check
                 against the sources below before applying, especially model names: a wrong one breaks the next
                 daily run for that AI.</p>
@@ -100,7 +100,7 @@
     <h2>AI models</h2>
     <p class="subtitle">Which model each AI is asked with, from the next daily run on.</p>
     {{ section_status("models") }}
-    <form class="settings-form" method="post" action="/settings/models">
+    <form class="settings-form" method="post" action="/admin/settings/models">
         <div class="settings-grid">
             {% for p in s.providers %}
                 <label for="model-{{ p.key }}">{{ p.name }}</label>
@@ -116,11 +116,11 @@
 </section>
 
 <section class="panel" id="weights">
-    <h2>AI weights</h2>
-    <p class="subtitle">How much each AI counts in the "AI odds" consensus. 1.0 each is equal weighting; 0 leaves an
-        AI out.</p>
+    <h2>Default AI weights</h2>
+    <p class="subtitle">How much each AI counts in the "AI odds" consensus for guests, and for any user who hasn't
+        set their own weights on their Settings tab. 1.0 each is equal weighting; 0 leaves an AI out.</p>
     {{ section_status("weights") }}
-    <form class="settings-form" method="post" action="/settings/weights">
+    <form class="settings-form" method="post" action="/admin/settings/weights">
         <div class="settings-grid">
             {% for p in s.providers %}
                 <label for="weight-{{ p.key }}">{{ p.name }}</label>
@@ -128,7 +128,7 @@
                        value="{{ p.weight }}" required>
             {% endfor %}
         </div>
-        <button type="submit" class="button inline primary">Save weights</button>
+        <button type="submit" class="button inline primary">Save default weights</button>
     </form>
 </section>
 </div>
@@ -138,7 +138,7 @@
     <p class="subtitle">USD per 1,000,000 tokens, from each provider's pricing page; used to estimate API spend.
         Leave a price blank if unknown -- its calls are recorded with an unknown cost rather than $0.</p>
     {{ section_status("pricing") }}
-    <form class="settings-form" method="post" action="/settings/pricing">
+    <form class="settings-form" method="post" action="/admin/settings/pricing">
         <div class="table-scroll">
         <table class="settings-table">
             <thead><tr><th>Model</th><th>Input $/1M</th><th>Output $/1M</th><th>Remove</th></tr></thead>
@@ -171,7 +171,7 @@
     <p class="subtitle">Which leagues the daily run logs, and each season's start dates. A blank date uses the
         default shown in grey.</p>
     {{ section_status("leagues") }}
-    <form class="settings-form" method="post" action="/settings/leagues">
+    <form class="settings-form" method="post" action="/admin/settings/leagues">
         <div class="league-grid">
         {% for lg in s.leagues %}
         <fieldset class="league-settings">

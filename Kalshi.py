@@ -5,7 +5,7 @@ import os
 import re
 import textwrap
 import uuid
-from typing import Optional
+from typing import NamedTuple, Optional
 from urllib.parse import urlparse
 
 import requests
@@ -22,8 +22,10 @@ TRADING_BASES = {
     "demo": "https://demo-api.kalshi.co/trade-api/v2",
 }
 
-# Each environment's credentials: an API key id plus its RSA private key,
-# given either as the PEM text itself or as a path to the .key file.
+# Where the single-login version read each environment's key from: an API
+# key id plus its private key (the PEM text, or a path to the .key file).
+# Keys now belong to users (Accounts.py); these are only read once, to move
+# them onto the first admin (legacy_env_credentials()).
 CREDENTIAL_VARS = {
     "live": {"key_id": "KALSHI_API_KEY_ID", "key": "KALSHI_API_KEY", "key_path": "KALSHI_PRIVATE_KEY_PATH"},
     "demo": {"key_id": "KALSHI_DEMO_API_KEY_ID", "key": "KALSHI_DEMO_API_KEY",
@@ -33,6 +35,13 @@ CREDENTIAL_VARS = {
 
 class TradingError(Exception):
     """Kalshi refused an authenticated request, or credentials are missing."""
+
+
+class Credentials(NamedTuple):
+    """One Kalshi account's API key: which exchange it's for, its id, and the loaded private key."""
+    env: str  # "demo" or "live" (TRADING_BASES)
+    key_id: str
+    private_key: object
 
 # Each league's per-game winner series (one binary market per team in each
 # game, e.g. KXNBAGAME) lives in Leagues.py. Not to be confused with the
@@ -105,65 +114,62 @@ def _env(name: str) -> Optional[str]:
     return value.strip() if value and value.strip() else None
 
 
-def _load_env_files() -> None:
+def legacy_env_credentials(env: str) -> Optional[tuple[str, str]]:
+    """
+    (key id, private key PEM text) from the environment / AIAPIKEYS.env, as
+    the single-login version kept them, or None. Only Accounts.bootstrap()
+    reads these, to move them onto the first admin's account.
+    """
     # override=True: AIAPIKEYS.env must win over a stale OS-level env var of
     # the same name, which load_dotenv() otherwise silently leaves in place.
     load_dotenv("AIAPIKEYS.env", override=True)
-
-
-def has_credentials(env: str = "live") -> bool:
-    """Whether `env`'s key id and private key are configured (not whether Kalshi accepts them)."""
-    _load_env_files()
-    names = CREDENTIAL_VARS[env]
-    if not _env(names["key_id"]):
-        return False
-    return bool(_env(names["key"])) or os.path.isfile(_env(names["key_path"]) or ("kalshi.key" if env == "live" else ""))
-
-
-def get_auth_headers(method, path, env: str = "live"):
-    """Load `env`'s credentials from AIAPIKEYS.env / the environment and sign one request."""
-    _load_env_files()
     names = CREDENTIAL_VARS[env]
     key_id = _env(names["key_id"])
     if not key_id:
-        raise TradingError(f"{names['key_id']} isn't set")
+        return None
     key_text = _env(names["key"])
-    if key_text:
-        private_key = parse_private_key(key_text)
-    else:
+    if not key_text:
         key_path = _env(names["key_path"]) or ("kalshi.key" if env == "live" else None)
         if not key_path or not os.path.isfile(key_path):
-            raise TradingError(f"set {names['key']} (the private key's text) or {names['key_path']}")
-        private_key = load_private_key(key_path)
-    return sign_request(private_key, method, path, key_id=key_id)
+            return None
+        with open(key_path, encoding="utf-8") as f:
+            key_text = f.read()
+    return key_id, key_text
 
 
-def _trade_request(method: str, endpoint: str, env: str, body: Optional[dict] = None) -> dict:
-    """An authenticated call to `env`'s exchange. Raises TradingError with Kalshi's message on a refusal."""
-    if env not in TRADING_BASES:
-        raise TradingError(f"unknown Kalshi environment {env!r}")
-    url = TRADING_BASES[env] + endpoint
+def get_auth_headers(method, path, creds: Credentials):
+    """Sign one request with `creds`."""
+    return sign_request(creds.private_key, method, path, key_id=creds.key_id)
+
+
+def _trade_request(method: str, endpoint: str, creds: Credentials, body: Optional[dict] = None) -> dict:
+    """An authenticated call to the exchange `creds` are for. Raises TradingError with Kalshi's message on a refusal."""
+    if creds is None:
+        raise TradingError("no Kalshi key saved")
+    if creds.env not in TRADING_BASES:
+        raise TradingError(f"unknown Kalshi environment {creds.env!r}")
+    url = TRADING_BASES[creds.env] + endpoint
     # Kalshi signs the full path from the root: /trade-api/v2/portfolio/...
-    headers = get_auth_headers(method, urlparse(url).path, env=env)
+    headers = get_auth_headers(method, urlparse(url).path, creds)
     response = requests.request(method, url, headers=headers, json=body, timeout=30)
     if response.status_code >= 400:
         try:
             detail = response.json().get("error") or response.json()
         except ValueError:
             detail = response.text[:300]
-        raise TradingError(f"Kalshi {env} {method} {endpoint}: HTTP {response.status_code} {detail}")
+        raise TradingError(f"Kalshi {creds.env} {method} {endpoint}: HTTP {response.status_code} {detail}")
     return response.json()
 
 
-def get_balance(env: str = "live") -> float:
-    """Available cash in `env`'s account, in dollars."""
-    data = _trade_request("GET", "/portfolio/balance", env)
+def get_balance(creds: Credentials) -> float:
+    """Available cash in the account `creds` belong to, in dollars."""
+    data = _trade_request("GET", "/portfolio/balance", creds)
     if data.get("balance_dollars") not in (None, ""):
         return float(data["balance_dollars"])
     return data["balance"] / 100.0
 
 
-def buy(ticker: str, side: str, count: int, price: float, env: str,
+def buy(ticker: str, side: str, count: int, price: float, creds: Credentials,
         client_order_id: Optional[str] = None) -> dict:
     """
     Buy up to `count` contracts on `side` ("yes"/"no") at `price` (0-1) or
@@ -190,7 +196,7 @@ def buy(ticker: str, side: str, count: int, price: float, env: str,
         "self_trade_prevention_type": "taker_at_cross",
         "client_order_id": client_order_id or str(uuid.uuid4()),
     }
-    data = _trade_request("POST", "/portfolio/events/orders", env, body)
+    data = _trade_request("POST", "/portfolio/events/orders", creds, body)
     filled = float(data.get("fill_count") or 0)
     filled = int(filled) if filled.is_integer() else filled
     if not filled:

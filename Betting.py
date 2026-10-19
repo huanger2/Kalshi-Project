@@ -1,41 +1,43 @@
 """
 Betting.py
 
-Automatic betting on the AI odds. When the daily run logs a game, the AIs'
-consensus probability (EVCalculator.consensus_probability(), weighted by
-ai_weights.json exactly like the webapp's "AI odds" column) is compared with
-what a contract actually costs right now -- the ask, not the midpoint -- on
-each side of the market:
+Automatic betting on the AI odds, for every user who has turned it on.
+When the daily run logs a game, that user's AI consensus probability
+(EVCalculator.consensus_probability(), weighted by their own AI weights --
+AIWeights.for_user() -- exactly like the "AI odds" column they see) is
+compared with what a contract actually costs right now -- the ask, not the
+midpoint -- on each side of the market:
 
     edge(YES) = AI odds - yes_ask           (backing the logged team)
     edge(NO)  = (1 - AI odds) - no_ask      (backing its opponent)
 
-The side with the bigger edge gets a bet if it clears betting.json's rules
+The side with the bigger edge gets a bet if it clears that user's rules
 (see decide()). A bet buys as many whole contracts as stake_usd covers.
 When more games qualify in a day than max_daily_usd covers, the biggest
 edges get the money (see apply_daily_cap()).
 
-betting.json's mode says where bets go:
+Each user's rules are their own (their "betting" setting, Accounts.py),
+and so is the mode, which says where their bets go:
 
     paper  recorded in predictions.db's bets table at the price it would
            have been bought at, plus Kalshi's fee; nothing is sent to Kalshi
-    demo   sent to Kalshi's test exchange (play money, KALSHI_DEMO_* keys)
-    live   sent to the real exchange (real money, KALSHI_API_KEY*)
+    demo   sent to Kalshi's test exchange (play money) with the user's demo key
+    live   sent to the real exchange (real money) with the user's live key
 
 A demo or live bet is an immediate-or-cancel limit order at the price the
 rules were checked against (Kalshi.buy()), so it fills at that price or
 better, or partly, or not at all; what's recorded is what actually filled,
-at Kalshi's reported price and fee. Each mode's bets are kept apart (the
-daily cap and the one-bet-per-market rule are per mode).
+at Kalshi's reported price and fee. Each user's bets, and each of their
+modes' bets, are kept apart (the daily cap and the one-bet-per-market rule
+are per user and mode).
 
 A bet's result isn't stored -- it follows from its game's outcome in the
 predictions table (see result()), which the daily run already settles, so
 bets never need a settle step of their own. Kalshi pays out real positions
 itself at settlement.
 
-betting.json is read fresh on every call, like the other config files, and
-goes through ConfigFiles, so the Betting tab's saves land on the volume
-when hosted.
+betting.json is no longer read for betting: it only seeds the first admin's
+rules when accounts are first set up (Accounts.bootstrap()).
 """
 
 import datetime
@@ -44,7 +46,6 @@ import sqlite3
 from pathlib import Path
 from typing import Callable, Optional
 
-import ConfigFiles
 import Leagues
 
 BETTING_PATH = Path(__file__).with_name("betting.json")
@@ -70,10 +71,44 @@ DEFAULTS = {
 FEE_RATE = 0.07
 
 
-def load_config() -> dict:
-    """betting.json's rules, with DEFAULTS filling in anything it leaves out (mode "off" if there's no file)."""
-    config = ConfigFiles.load(BETTING_PATH)
+def load_config(conn: sqlite3.Connection, user_id: int) -> dict:
+    """A user's betting rules, with DEFAULTS filling in anything unset (mode "off" for a new user)."""
+    import Accounts
+
+    config = Accounts.get_setting(conn, user_id, "betting") or {}
     return {key: config.get(key, default) for key, default in DEFAULTS.items()}
+
+
+def bettors(conn: sqlite3.Connection) -> list[dict]:
+    """
+    Everyone the daily run bets for: each user whose mode isn't off, with
+    their rules, AI weights and -- demo/live -- their Kalshi key. A user
+    in demo/live mode without a usable key is left out, with a message.
+
+    Each is {"user_id", "username", "config", "weights", "creds"}.
+    """
+    import Accounts
+    import AIWeights
+
+    found = []
+    for user in Accounts.list_users(conn):
+        config = load_config(conn, user["id"])
+        mode = config["mode"]
+        if mode not in MODES or mode == "off":
+            continue
+        creds = None
+        if mode in TRADING_MODES:
+            try:
+                creds = Accounts.kalshi_credentials(conn, user["id"], mode)
+            except Exception as e:
+                print(f"no bets for {user['username']}: {e}")
+                continue
+            if creds is None:
+                print(f"no bets for {user['username']}: {mode} mode, but no Kalshi {mode} key saved")
+                continue
+        found.append({"user_id": user["id"], "username": user["username"], "config": config,
+                      "weights": AIWeights.for_user(conn, user["id"]), "creds": creds})
+    return found
 
 
 def fee(count: int, price: float) -> float:
@@ -151,10 +186,11 @@ def result(bet: dict, outcome: Optional[int], tied: bool = False) -> dict:
     return {"status": status, "payout": payout, "pnl": round(payout - bet["cost"] - bet["fee"], 4)}
 
 
-def spent_on(conn: sqlite3.Connection, game_date: str, mode: str) -> float:
-    """Cost + fees of the `mode` bets already placed on one game day."""
+def spent_on(conn: sqlite3.Connection, user_id: int, game_date: str, mode: str) -> float:
+    """Cost + fees of a user's `mode` bets already placed on one game day."""
     row = conn.execute(
-        "SELECT COALESCE(SUM(cost + fee), 0) FROM bets WHERE game_date = ? AND mode = ?", (game_date, mode)
+        "SELECT COALESCE(SUM(cost + fee), 0) FROM bets WHERE user_id = ? AND game_date = ? AND mode = ?",
+        (user_id, game_date, mode)
     ).fetchone()
     return row[0]
 
@@ -186,72 +222,78 @@ def apply_daily_cap(
 
 def candidate(
     conn: sqlite3.Connection,
+    bettor: dict,
     market: dict,
     predictions: list,
     prices: dict,
     game_date: str,
     opponent: Optional[str] = None,
-    config: Optional[dict] = None,
 ) -> Optional[dict]:
     """
-    The bet the rules call for on a market the daily run just logged, or
-    None. Not placed yet: place() decides which candidates fit the daily cap.
+    The bet one user's rules call for on a market the daily run just
+    logged, or None. Not placed yet: place() decides which candidates fit
+    that user's daily cap.
 
     Args:
+        bettor:      One of bettors(): whose rules, weights and key.
         market:      Kalshi market dict (the one whose predictions were logged).
         predictions: That market's LLMPrediction objects.
         prices:      Kalshi.get_prices(market) -- yes_ask/no_ask are what a bet pays.
         game_date:   ISO date the game is on (the daily cap is per game day).
 
-    Returns decide()'s bet plus what place() records: mode, ticker,
+    Returns decide()'s bet plus what place() records: user_id, mode, ticker,
     event_ticker, league, game_date, team, opponent, reason.
     """
     import AIWeights
     import SeasonType
     from EVCalculator import consensus_probability
 
-    config = config or load_config()
+    config = bettor["config"]
     mode = config["mode"]
     if mode not in MODES or mode == "off":
         return None
     ticker = market["ticker"]
-    if conn.execute("SELECT 1 FROM bets WHERE ticker = ? AND mode = ?", (ticker, mode)).fetchone():
+    if conn.execute("SELECT 1 FROM bets WHERE ticker = ? AND mode = ? AND user_id = ?",
+                    (ticker, mode, bettor["user_id"])).fetchone():
         return None  # already bet on this market
 
     league = Leagues.league_for_ticker(ticker)
-    ai_prob = consensus_probability(predictions, {p.llm_name: AIWeights.get_weight(p.llm_name) for p in predictions})
+    weights = {p.llm_name: AIWeights.lookup(bettor["weights"], p.llm_name) for p in predictions}
+    ai_prob = consensus_probability(predictions, weights)
     bet, reason = decide(ai_prob, len(predictions), prices.get("yes_ask"), prices.get("no_ask"), league, config,
                          segment=SeasonType.segment_iso(game_date, league))
     if bet is None:
-        print(f"no bet on {ticker}: {reason}")
+        print(f"no bet for {bettor['username']} on {ticker}: {reason}")
         return None
-    return {**bet, "mode": mode, "ticker": ticker, "event_ticker": market.get("event_ticker"), "league": league,
-            "game_date": game_date, "team": market.get("yes_sub_title"), "opponent": opponent, "reason": reason}
+    return {**bet, "user_id": bettor["user_id"], "mode": mode, "ticker": ticker,
+            "event_ticker": market.get("event_ticker"), "league": league, "game_date": game_date,
+            "team": market.get("yes_sub_title"), "opponent": opponent, "reason": reason}
 
 
-def place(conn: sqlite3.Connection, candidates: list[dict], config: Optional[dict] = None) -> list[dict]:
+def place(conn: sqlite3.Connection, bettor: dict, candidates: list[dict]) -> list[dict]:
     """
-    Place the candidates that fit under each day's cap, biggest edge first
-    (see apply_daily_cap()), counting bets earlier runs already placed that
-    day. Paper bets are just recorded; demo/live ones are sent to Kalshi
-    first (see send()), and only what fills is recorded. Returns the bets
-    placed.
+    Place one user's candidates that fit under each day's cap, biggest edge
+    first (see apply_daily_cap()), counting bets earlier runs already placed
+    that day. Paper bets are just recorded; demo/live ones are sent to
+    Kalshi with the user's key first (see send()), and only what fills is
+    recorded. Returns the bets placed.
     """
-    config = config or load_config()
+    config = bettor["config"]
     kept, skipped = apply_daily_cap(
-        candidates, config["max_daily_usd"], lambda game_date: spent_on(conn, game_date, config["mode"])
+        candidates, config["max_daily_usd"],
+        lambda game_date: spent_on(conn, bettor["user_id"], game_date, config["mode"])
     )
     placed = []
     for bet in kept:
         if bet["mode"] in TRADING_MODES:
-            bet = send(bet)
+            bet = send(bet, bettor["creds"])
             if bet is None:
                 continue
         conn.execute(
-            "INSERT INTO bets (created_at, mode, ticker, event_ticker, league, game_date, team, opponent, "
+            "INSERT INTO bets (created_at, user_id, mode, ticker, event_ticker, league, game_date, team, opponent, "
             " side, price, count, cost, fee, ai_prob, edge, order_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (datetime.datetime.now().isoformat(timespec="seconds"), bet["mode"], bet["ticker"],
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (datetime.datetime.now().isoformat(timespec="seconds"), bet["user_id"], bet["mode"], bet["ticker"],
              bet["event_ticker"], bet["league"], bet["game_date"], bet["team"], bet["opponent"], bet["side"],
              bet["price"], bet["count"], bet["cost"], bet["fee"], bet["ai_prob"], bet["edge"], bet.get("order_id")),
         )
@@ -259,45 +301,46 @@ def place(conn: sqlite3.Connection, candidates: list[dict], config: Optional[dic
         # on a later one mustn't lose the record of this one.
         conn.commit()
         placed.append(bet)
-        print(f"{bet['mode']} bet on {bet['ticker']}: {bet['reason']}")
+        print(f"{bet['mode']} bet for {bettor['username']} on {bet['ticker']}: {bet['reason']}")
     for bet in skipped:
-        print(f"no bet on {bet['ticker']}: {bet['reason']}, but the ${config['max_daily_usd']:.2f} daily cap "
-              f"went to bigger edges")
+        print(f"no bet for {bettor['username']} on {bet['ticker']}: {bet['reason']}, but the "
+              f"${config['max_daily_usd']:.2f} daily cap went to bigger edges")
     return placed
 
 
-def record_balance(conn: sqlite3.Connection, mode: str, balance: float, force: bool = False) -> bool:
+def record_balance(conn: sqlite3.Connection, user_id: int, mode: str, balance: float, force: bool = False) -> bool:
     """
-    Note a demo/live account's cash balance for the Betting tab's chart.
-    Unless `force` (the daily run's once-a-day snapshot), a value equal to
-    the last one recorded today is skipped, so page views don't pile up
-    duplicate points. Returns whether a row was added.
+    Note a user's demo/live account cash balance for the Betting tab's
+    chart. Unless `force` (the daily run's once-a-day snapshot), a value
+    equal to the last one recorded today is skipped, so page views don't
+    pile up duplicate points. Returns whether a row was added.
     """
     now = datetime.datetime.now().isoformat(timespec="seconds")
     if not force:
         last = conn.execute(
-            "SELECT recorded_at, balance FROM balance_history WHERE mode = ? ORDER BY recorded_at DESC, id DESC "
-            "LIMIT 1", (mode,)
+            "SELECT recorded_at, balance FROM balance_history WHERE user_id = ? AND mode = ? "
+            "ORDER BY recorded_at DESC, id DESC LIMIT 1", (user_id, mode)
         ).fetchone()
         if last and last[0][:10] == now[:10] and abs(last[1] - balance) < 0.005:
             return False
-    conn.execute("INSERT INTO balance_history (recorded_at, mode, balance) VALUES (?, ?, ?)",
-                 (now, mode, round(balance, 2)))
+    conn.execute("INSERT INTO balance_history (recorded_at, user_id, mode, balance) VALUES (?, ?, ?, ?)",
+                 (now, user_id, mode, round(balance, 2)))
     conn.commit()
     return True
 
 
-def send(bet: dict) -> Optional[dict]:
+def send(bet: dict, creds) -> Optional[dict]:
     """
-    Send a demo/live bet to Kalshi as an immediate-or-cancel buy at its
-    price or better. Returns the bet as filled (count, price, cost, fee and
-    edge from the fill, plus order_id), or None if nothing filled or Kalshi
-    refused -- either way the run goes on to the next bet.
+    Send a demo/live bet to Kalshi with `creds` (the user's key) as an
+    immediate-or-cancel buy at its price or better. Returns the bet as
+    filled (count, price, cost, fee and edge from the fill, plus order_id),
+    or None if nothing filled or Kalshi refused -- either way the run goes
+    on to the next bet.
     """
     import Kalshi
 
     try:
-        fill = Kalshi.buy(bet["ticker"], bet["side"], bet["count"], bet["price"], env=bet["mode"])
+        fill = Kalshi.buy(bet["ticker"], bet["side"], bet["count"], bet["price"], creds)
     except Exception as e:
         print(f"{bet['mode']} order on {bet['ticker']} failed: {e}")
         return None
@@ -310,10 +353,9 @@ def send(bet: dict) -> Optional[dict]:
     return {**bet, **fill, "edge": side_prob - fill["price"], "reason": reason}
 
 
-def consider(conn: sqlite3.Connection, market: dict, predictions: list, prices: dict, game_date: str,
-             opponent: Optional[str] = None, config: Optional[dict] = None) -> Optional[dict]:
+def consider(conn: sqlite3.Connection, bettor: dict, market: dict, predictions: list, prices: dict,
+             game_date: str, opponent: Optional[str] = None) -> Optional[dict]:
     """candidate() and place() for a single market: the bet placed, or None."""
-    config = config or load_config()
-    bet = candidate(conn, market, predictions, prices, game_date, opponent=opponent, config=config)
-    placed = place(conn, [bet], config) if bet else []
+    bet = candidate(conn, bettor, market, predictions, prices, game_date, opponent=opponent)
+    placed = place(conn, bettor, [bet]) if bet else []
     return placed[0] if placed else None

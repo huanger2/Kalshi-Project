@@ -166,9 +166,9 @@ class SuggestionPageTests(SettingsPageTestCase):
     def test_guests_cannot_ask_or_apply(self):
         self.client.post("/guest")
         with mock.patch.object(suggestions, "fetch") as fetch:
-            self.assertEqual(self.client.post("/settings/suggestions").status_code, 403)
+            self.assertEqual(self.client.post("/admin/settings/suggestions").status_code, 403)
             fetch.assert_not_called()
-        self.assertEqual(self.client.post("/settings/suggestions/apply", data={}).status_code, 403)
+        self.assertEqual(self.client.post("/admin/settings/suggestions/apply", data={}).status_code, 403)
 
     def test_asking_shows_the_review_table_and_sources(self):
         self.sign_in()
@@ -176,7 +176,7 @@ class SuggestionPageTests(SettingsPageTestCase):
         fake = FakeGemini()
         with mock.patch.object(suggestions, "fetch",
                                side_effect=lambda: real(research=fake.research, format_=fake.format, today=TODAY)):
-            r = self.client.post("/settings/suggestions")
+            r = self.client.post("/admin/settings/suggestions")
         self.assertEqual(r.status_code, 200)
         self.assertIn("Apply selected", r.text)
         self.assertIn('name="apply::models|openai"', r.text)
@@ -188,13 +188,13 @@ class SuggestionPageTests(SettingsPageTestCase):
     def test_a_gemini_failure_is_shown_not_a_crash(self):
         self.sign_in()
         with mock.patch.object(suggestions, "fetch", side_effect=ValueError("Gemini's reply had no JSON in it.")):
-            r = self.client.post("/settings/suggestions")
+            r = self.client.post("/admin/settings/suggestions")
         self.assertEqual(r.status_code, 502)
         self.assertIn("Couldn&#39;t get suggestions from Gemini", r.text)
 
     def test_applying_redirects_with_what_was_saved(self):
         self.sign_in()
-        r = self.client.post("/settings/suggestions/apply",
+        r = self.client.post("/admin/settings/suggestions/apply",
                              data={"apply::models|openai": "on", "value::models|openai": json.dumps("gpt-6")},
                              follow_redirects=False)
         self.assertEqual(r.status_code, 303)

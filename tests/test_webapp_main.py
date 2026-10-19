@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 import time
 
 import Leagues
+import Accounts
 import Tracker
 from EVCalculator import LLMPrediction
 from webapp import auth
@@ -213,24 +214,36 @@ class LoginTests(WebAppTestCase):
             self.assertIn("Incorrect username or password", r.text)
         self.assertEqual(self.client.get("/", follow_redirects=False).status_code, 303)  # still not in
 
-    def test_nobody_can_sign_in_when_the_login_isnt_configured(self):
+    def test_nobody_can_sign_in_before_there_is_an_account(self):
+        # No users yet, and no USERNAME/PASSWORD to create the first admin from.
         with mock.patch.dict("os.environ"):
             os.environ.pop("PASSWORD")
             r = self.sign_in("admin", "")
         self.assertEqual(r.status_code, 401)
-        self.assertIn("isn&#39;t set up", r.text)
+        self.assertIn("no accounts on this server yet", r.text)
 
-    def test_a_forged_admin_cookie_is_not_trusted(self):
-        self.client.cookies.set(auth.COOKIE, "admin.9999999999.deadbeef")
+    def test_a_forged_cookie_is_not_trusted(self):
+        self.sign_in()  # the account exists; the cookie just isn't signed by this server
+        self.client.cookies.set(auth.COOKIE, "u.1.1.9999999999.deadbeef")
         self.assertEqual(self.client.get("/", follow_redirects=False).status_code, 303)
 
-    def test_changing_the_password_signs_the_admin_out(self):
+    def test_a_password_change_signs_the_user_out_everywhere(self):
         self.sign_in()
-        with mock.patch.dict("os.environ", {"PASSWORD": "rotated"}):
-            self.assertEqual(self.client.get("/", follow_redirects=False).status_code, 303)
+        conn = Tracker.connect(self.db_path)
+        try:
+            Accounts.set_password(conn, Accounts.first_admin_id(conn), "a-new-password")
+        finally:
+            conn.close()
+        self.assertEqual(self.client.get("/", follow_redirects=False).status_code, 303)
 
     def test_an_expired_sign_in_is_not_trusted(self):
-        self.client.cookies.set(auth.COOKIE, auth.admin_cookie(now=time.time() - auth.MAX_AGE - 60))
+        self.sign_in()
+        conn = Tracker.connect(self.db_path)
+        try:
+            user = Accounts.get_user(conn, Accounts.first_admin_id(conn))
+            self.client.cookies.set(auth.COOKIE, auth.user_cookie(conn, user, now=time.time() - auth.MAX_AGE - 60))
+        finally:
+            conn.close()
         self.assertEqual(self.client.get("/", follow_redirects=False).status_code, 303)
 
     def test_signing_out_returns_to_the_login_page(self):

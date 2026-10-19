@@ -286,6 +286,34 @@ body {
 .mode-switch a { padding: 0.3rem 0.7rem; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); text-decoration: none; font-size: 0.85rem; font-weight: 600; }
 .mode-switch a:hover { color: var(--text); }
 .mode-switch a.active { color: var(--accent); border-color: var(--accent); }
+.admin-nav { margin: 0 0 1.25rem; }
+.settings-form textarea {
+    width: 100%;
+    padding: 0.4rem 0.55rem;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel);
+    color: var(--text);
+    font: 0.8rem ui-monospace, SFMono-Regular, Consolas, monospace;
+    resize: vertical;
+}
+.settings-form textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.key-cards { --col-min: 24rem; margin: 0.75rem 0 0; }
+.key-card { border: 1px solid var(--border); border-radius: 8px; padding: 0.9rem 1rem 1rem; min-width: 0; }
+.key-card h3 { margin: 0 0 0.6rem; font-size: 1rem; }
+.key-card .facts { margin-bottom: 0.75rem; }
+.key-card .facts code { word-break: break-all; }
+.key-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.key-actions form { margin: 0; }
+.key-replace { margin-top: 0.75rem; }
+.key-replace summary { cursor: pointer; color: var(--muted); font-size: 0.88rem; }
+.row-actions { display: flex; gap: 0.35rem 0.9rem; flex-wrap: wrap; align-items: center; }
+.subtitle a, .note a, .form-error a, .form-message a, .empty a { color: var(--accent); }
+.users td { white-space: nowrap; }
+.row-actions form { margin: 0; }
+.link-button.danger { color: var(--lost); }
+.temp-password code { font-size: 0.95rem; user-select: all; }
+.account .who { color: var(--text); font-weight: 600; }
 
 .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
 

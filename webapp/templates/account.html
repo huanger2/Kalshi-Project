@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block title %}Settings - AI vs Kalshi{% endblock %}
+
+{% macro errors_for(key) %}
+    {% for e in errors.get(key, []) %}{% if loop.first %}<div class="form-error" role="alert">Nothing was saved:<ul>{% endif %}
+        <li>{{ e }}</li>{% if loop.last %}</ul></div>{% endif %}{% endfor %}
+{% endmacro %}
+
+{% block content %}
+{% set u = a.user %}
+
+<section class="panel">
+    <h1>Settings</h1>
+    <p class="subtitle">Yours alone, {{ u.username }}: nobody else sees or uses them. Site-wide settings like the AI
+        models and league dates are {% if u.is_admin %}on the <a href="/admin/settings">Admin tab</a>{% else %}set by an admin{% endif %}.</p>
+</section>
+
+<div class="panel-row">
+<section class="panel" id="account">
+    <h2>Account</h2>
+    {% if u.must_change_password %}
+        <p class="form-error" role="alert">You're signed in with a temporary password. Pick your own to carry on.</p>
+    {% endif %}
+    {% if saved == "account" %}<p class="form-message" role="status">Password changed. Any other browser you were
+        signed in on has been signed out.</p>{% endif %}
+    {{ errors_for("account") }}
+    <dl class="facts">
+        <dt>Username</dt><dd>{{ u.username }}</dd>
+        <dt>Role</dt><dd>{{ "Admin" if u.is_admin else "User" }}</dd>
+    </dl>
+    <form class="settings-form" method="post" action="/settings/password">
+        <div class="settings-grid">
+            <label for="current_password">Current password</label>
+            <input id="current_password" name="current_password" type="password" autocomplete="current-password" required>
+            <label for="new_password">New password</label>
+            <input id="new_password" name="new_password" type="password" autocomplete="new-password" minlength="8" required>
+            <label for="confirm_password">New password again</label>
+            <input id="confirm_password" name="confirm_password" type="password" autocomplete="new-password" minlength="8" required>
+        </div>
+        <button type="submit" class="button inline primary">Change password</button>
+    </form>
+</section>
+
+<section class="panel" id="weights">
+    <h2>AI weights</h2>
+    <p class="subtitle">How much each AI counts in the "AI odds" you see on every page, and in the bets placed for you.
+        1.0 each is equal weighting; 0 leaves an AI out.</p>
+    {% if saved == "weights" %}<p class="form-message" role="status">Saved.</p>{% endif %}
+    {{ errors_for("weights") }}
+    <p class="note">{% if a.custom_weights %}Using your own weights.
+        <button type="submit" form="reset-weights" class="link-button">Go back to the site defaults</button>
+        {% else %}Following the site defaults; saving makes these your own.{% endif %}</p>
+    {% if a.custom_weights %}<form id="reset-weights" method="post" action="/settings/weights/reset"></form>{% endif %}
+    <form class="settings-form" method="post" action="/settings/weights">
+        <div class="settings-grid">
+            {% for p in a.providers %}
+                <label for="weight-{{ p.key }}">{{ p.name }}</label>
+                <div>
+                    <input id="weight-{{ p.key }}" name="weight::{{ p.key }}" type="number" step="0.05" min="0" max="10"
+                           value="{{ p.weight }}" required>
+                    {% if a.custom_weights and p.weight != p.default %}<span class="muted default-hint">site default {{ p.default }}</span>{% endif %}
+                </div>
+            {% endfor %}
+        </div>
+        <button type="submit" class="button inline primary">Save weights</button>
+    </form>
+</section>
+</div>
+
+<section class="panel" id="kalshi">
+    <h2>Kalshi API keys</h2>
+    <p class="subtitle">Needed for demo or live betting, which places orders from your own Kalshi account. Create a key
+        on Kalshi under Account &rarr; API Keys (the demo site at demo.kalshi.co issues its own, separate keys), then
+        enter its ID and private key here. The private key is stored encrypted and never shown again; replace it any
+        time.</p>
+    {% if checked %}
+        {% if checked.error %}<p class="form-error" role="alert">Kalshi didn't accept the {{ checked.env }} key: {{ checked.error }}</p>
+        {% else %}<p class="form-message" role="status">The {{ checked.env }} key works: the account has
+            ${{ "%.2f" | format(checked.balance) }} available.</p>{% endif %}
+    {% endif %}
+    <div class="panel-row key-cards">
+        {% for k in a.kalshi %}
+        <div class="key-card" id="kalshi-{{ k.env }}">
+            <h3>{{ k.name }}</h3>
+            {% if saved == "kalshi-" ~ k.env %}<p class="form-message" role="status">Key saved.</p>{% endif %}
+            {% if saved == "kalshi-" ~ k.env ~ "-removed" %}<p class="form-message" role="status">Key removed.</p>{% endif %}
+            {{ errors_for("kalshi-" ~ k.env) }}
+            {% if k.key %}
+                <dl class="facts">
+                    <dt>Key ID</dt><dd><code>{{ k.key.key_id }}</code></dd>
+                    <dt>Saved</dt><dd>{{ k.key.saved_at | replace("T", " ") }}</dd>
+                    <dt>Betting with it</dt><dd>{{ "Yes" if k.in_use else "No" }}</dd>
+                </dl>
+                <div class="key-actions">
+                    <form method="post" action="/settings/kalshi/{{ k.env }}/check"><button type="submit" class="button inline">Check it works</button></form>
+                    <form method="post" action="/settings/kalshi/{{ k.env }}/delete"><button type="submit" class="button inline">Remove</button></form>
+                </div>
+                <details class="key-replace">
+                    <summary>Replace this key</summary>
+            {% else %}
+                <p class="muted">No key saved.</p>
+            {% endif %}
+            <form class="settings-form" method="post" action="/settings/kalshi/{{ k.env }}" enctype="multipart/form-data">
+                <div class="settings-grid">
+                    <label for="key-id-{{ k.env }}">Key ID</label>
+                    <input id="key-id-{{ k.env }}" name="key_id" required spellcheck="false" autocomplete="off"
+                           placeholder="e.g. 1a2b3c4d-...">
+                    <label for="key-text-{{ k.env }}">Private key</label>
+                    <textarea id="key-text-{{ k.env }}" name="private_key" rows="4" spellcheck="false" autocomplete="off"
+                              placeholder="-----BEGIN PRIVATE KEY-----&#10;...&#10;-----END PRIVATE KEY-----"></textarea>
+                    <label for="key-file-{{ k.env }}">Or its .key file</label>
+                    <input id="key-file-{{ k.env }}" name="key_file" type="file" accept=".key,.pem,.txt">
+                </div>
+                <button type="submit" class="button inline primary">Save {{ "demo" if k.env == "demo" else "live" }} key</button>
+            </form>
+            {% if k.key %}</details>{% endif %}
+        </div>
+        {% endfor %}
+    </div>
+</section>
+
+{% endblock %}

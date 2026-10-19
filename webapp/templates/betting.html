@@ -40,8 +40,8 @@
     </p>
     {% if a %}
     {% if not a.credentials %}
-        <p class="form-error" role="alert">No {{ 'Kalshi demo' if a.mode == 'demo' else 'live Kalshi' }} keys are set, so orders will fail.
-            See the README's Betting section.</p>
+        <p class="form-error" role="alert">You have no {{ 'Kalshi demo' if a.mode == 'demo' else 'live Kalshi' }} key saved, so no
+            orders can be placed. <a href="/settings#kalshi">Add it on the Settings tab</a>.</p>
     {% elif a.error %}
         <p class="form-error" role="alert">Couldn't reach the {{ 'Kalshi demo' if a.mode == 'demo' else 'live Kalshi' }} account: {{ a.error }}</p>
     {% endif %}
@@ -117,13 +117,10 @@
     {% for e in errors %}{% if loop.first %}<div class="form-error" role="alert">Nothing was saved:<ul>{% endif %}
         <li>{{ e }}</li>{% if loop.last %}</ul></div>{% endif %}{% endfor %}
     <p class="note">
-        {% if b.hosted and b.file.override %}
-            Saved on this server, overriding the deployed <code>{{ b.file.name }}</code>.
-            <button type="submit" form="reset-rules" class="link-button">Reset to repo version</button>
-        {% elif b.hosted %}Using the deployed <code>{{ b.file.name }}</code>. Saving keeps your changes on this server.
-        {% else %}Saves to <code>{{ b.file.name }}</code> in the project folder.{% endif %}
+        Your rules only: everyone who bets here has their own. Demo and live use your own Kalshi keys
+        ({% for env, has in b["keys"].items() %}{{ env }}: {{ "saved" if has else "not saved" }}{{ ", " if not loop.last }}{% endfor %};
+        <a href="/settings#kalshi">manage them</a>).
     </p>
-    {% if b.hosted and b.file.override %}<form id="reset-rules" method="post" action="/betting/rules/reset"></form>{% endif %}
 
     <form class="settings-form" method="post" action="/betting/rules">
         <div class="settings-grid">

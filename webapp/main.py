@@ -14,6 +14,7 @@ import sqlite3
 import sys
 import tempfile
 import traceback
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Optional
 from urllib.parse import quote
@@ -25,11 +26,13 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+import Accounts
+import AIWeights
 import CostTracker
 import Leagues
 import Tracker
 from DailyLog import DEFAULT_LLM_NAMES
-from webapp import auth, betting, daily_run, data_files, queries, settings, suggestions
+from webapp import account, auth, betting, daily_run, data_files, queries, settings, suggestions, users
 
 HERE = Path(__file__).parent
 
@@ -92,19 +95,65 @@ _OPEN_PATHS = {"/login", "/guest", "/logout"}
 _OPEN_PREFIXES = ("/static/", "/api/", "/internal/")
 
 
+def get_db() -> Iterator[sqlite3.Connection]:
+    """
+    A fresh connection per request, closed when the handler returns --
+    sqlite3 connections aren't meant to be shared across threads, and
+    uvicorn's default sync handlers each run on their own thread.
+
+    A FastAPI dependency (not a plain helper function) specifically so
+    tests can override it via app.dependency_overrides to point at a
+    throwaway database instead of the real predictions.db.
+    """
+    conn = Tracker.connect()
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+@contextmanager
+def _db():
+    """A database connection outside a route (the middleware), from get_db -- or the tests' override of it."""
+    factory = app.dependency_overrides.get(get_db, get_db)
+    gen = factory()
+    try:
+        yield next(gen)
+    finally:
+        gen.close()
+
+
+# Where a user who was given a temporary password is sent until they pick their own.
+_PASSWORD_PAGE = "/settings"
+
+
 @app.middleware("http")
 async def require_sign_in_or_guest(request: Request, call_next):
     """
-    Records who's viewing (request.state.role: "admin", "guest" or None) for
-    routes and templates, and sends a first-time visitor's page request to
-    the login page, which remembers where they were headed.
+    Records who's viewing for routes and templates -- request.state.user
+    (the signed-in user's dict, or None) and request.state.role ("admin",
+    "user", "guest" or None) -- and sends a first-time visitor's page
+    request to the login page, which remembers where they were headed.
     """
-    request.state.role = auth.role(request)
+    value = request.cookies.get(auth.COOKIE)
+    user = None
+    if value and not auth.is_guest(value):
+        try:
+            with _db() as conn:
+                user = auth.signed_in_user(conn, value)
+        except sqlite3.OperationalError as exc:
+            return await database_unavailable(request, exc)
+    request.state.user = user
+    request.state.role = auth.role_of(user, value)
+
     path = request.url.path
     is_open = path in _OPEN_PATHS or path.startswith(_OPEN_PREFIXES)
     if request.state.role is None and not is_open and request.method == "GET":
         target = path + (f"?{request.url.query}" if request.url.query else "")
         return RedirectResponse(f"/login?next={quote(target, safe='')}", status_code=303)
+    if (user and user["must_change_password"] and request.method == "GET" and not is_open
+            and path != _PASSWORD_PAGE):
+        return RedirectResponse(f"{_PASSWORD_PAGE}#account", status_code=303)
     return await call_next(request)
 
 
@@ -117,7 +166,7 @@ def _set_session(response: RedirectResponse, request: Request, value: str, max_a
 
 @app.get("/login", response_class=HTMLResponse)
 def login_page(request: Request, next: Optional[str] = None):
-    if request.state.role == auth.ADMIN:
+    if request.state.user is not None:
         return RedirectResponse(auth.safe_next(next), status_code=303)
     return templates.TemplateResponse(
         request, "login.html", {"next": auth.safe_next(next), "error": None, "username": ""}
@@ -130,17 +179,27 @@ def login(
     username: str = Form(""),
     password: str = Form(""),
     next: str = Form("/"),
+    conn: sqlite3.Connection = Depends(get_db),
 ):
-    if not auth.credentials_match(username, password):
-        error = ("Incorrect username or password." if auth.is_configured()
-                 else "Signing in isn't set up on this server yet. You can still continue as a guest.")
+    def refuse(error: str, status_code: int):
         return templates.TemplateResponse(
-            request, "login.html",
-            {"next": auth.safe_next(next), "error": error, "username": username},
-            status_code=401,
-        )
+            request, "login.html", {"next": auth.safe_next(next), "error": error, "username": username},
+            status_code=status_code)
+
+    client = request.client.host if request.client else "?"
+    if auth.throttled(username, client):
+        return refuse("Too many failed sign-ins. Wait a few minutes and try again.", 429)
+    Accounts.bootstrap(conn)  # the very first sign-in creates the admin from USERNAME/PASSWORD
+    user = Accounts.authenticate(conn, username, password)
+    if user is None:
+        auth.record_failure(username, client)
+        if not Accounts.count_users(conn):
+            return refuse("There are no accounts on this server yet. Set USERNAME and PASSWORD on the server "
+                          "to create the first admin. You can still continue as a guest.", 401)
+        return refuse("Incorrect username or password.", 401)
+    auth.clear_failures(username, client)
     response = RedirectResponse(auth.safe_next(next), status_code=303)
-    _set_session(response, request, auth.admin_cookie(), auth.MAX_AGE)
+    _set_session(response, request, auth.user_cookie(conn, user), auth.MAX_AGE)
     return response
 
 
@@ -158,21 +217,23 @@ def logout():
     return response
 
 
-def get_db() -> Iterator[sqlite3.Connection]:
-    """
-    A fresh connection per request, closed when the handler returns --
-    sqlite3 connections aren't meant to be shared across threads, and
-    uvicorn's default sync handlers each run on their own thread.
+def _require_admin(request: Request) -> dict:
+    if request.state.role != auth.ADMIN:
+        raise HTTPException(status_code=403, detail="Only an admin can do that")
+    return request.state.user
 
-    A FastAPI dependency (not a plain helper function) specifically so
-    tests can override it via app.dependency_overrides to point at a
-    throwaway database instead of the real predictions.db.
-    """
-    conn = Tracker.connect()
-    try:
-        yield conn
-    finally:
-        conn.close()
+
+def _require_user(request: Request) -> dict:
+    """The signed-in user (admin or not); guests get a 403."""
+    if request.state.user is None:
+        raise HTTPException(status_code=403, detail="Sign in to do that")
+    return request.state.user
+
+
+def _viewer_weights(request: Request, conn: sqlite3.Connection) -> dict:
+    """The AI weights behind the "AI odds" this viewer sees: their own, or the site defaults for a guest."""
+    user = request.state.user
+    return AIWeights.for_user(conn, user["id"] if user else None)
 
 
 def _league_or_404(code: str) -> str:
@@ -191,7 +252,8 @@ def _render_markets(
     segment: Optional[str],
 ):
     """The markets table: every league's games (league=None) or one league's tab."""
-    games = queries.list_games(conn, game_date=date, segment=segment, season_year=season, league=league)
+    games = queries.list_games(conn, game_date=date, segment=segment, season_year=season, league=league,
+                               weights=_viewer_weights(request, conn))
     dates = queries.list_game_dates(conn, segment=segment, season_year=season, league=league)
     seasons = queries.list_season_years(conn, league=league)
     accuracy = queries.accuracy_summary(conn, segment=segment, season_year=season, league=league)
@@ -332,7 +394,99 @@ def api_ai_detail(
     }
 
 
-# --- Admin settings tab: edit the JSON config files (see webapp/settings.py) ---
+# --- Settings: a user's own (password, AI weights, Kalshi keys; see webapp/account.py) ---
+
+def _render_account(request: Request, conn: sqlite3.Connection, saved: Optional[str] = None,
+                    errors: Optional[dict] = None, checked: Optional[dict] = None, status_code: int = 200):
+    user = request.state.user
+    return templates.TemplateResponse(
+        request, "account.html",
+        {"a": account.view(conn, user), "saved": saved, "errors": errors or {}, "checked": checked,
+         "ai_names": DEFAULT_LLM_NAMES, "active_tab": "settings"},
+        status_code=status_code,
+    )
+
+
+@app.get("/settings", response_class=HTMLResponse)
+def settings_page(request: Request, saved: Optional[str] = None, conn: sqlite3.Connection = Depends(get_db)):
+    _require_user(request)
+    return _render_account(request, conn, saved=saved)
+
+
+# These read the whole form, so they're async -- and so open their own
+# connection (_db()) on the event loop's thread: a Depends(get_db)
+# connection is made on a worker thread, and SQLite won't share it.
+
+@app.post("/settings/password", response_class=HTMLResponse)
+async def change_password(request: Request):
+    user = _require_user(request)
+    form = dict(await request.form())
+    with _db() as conn:
+        try:
+            account.change_password(conn, user, form)
+        except settings.SettingsError as e:
+            return _render_account(request, conn, errors={"account": e.errors}, status_code=400)
+        # The change signed out every session, this one included: sign it back in.
+        response = RedirectResponse("/settings?saved=account#account", status_code=303)
+        _set_session(response, request, auth.user_cookie(conn, Accounts.get_user(conn, user["id"])), auth.MAX_AGE)
+    return response
+
+
+@app.post("/settings/weights", response_class=HTMLResponse)
+async def save_own_weights(request: Request):
+    user = _require_user(request)
+    form = dict(await request.form())
+    with _db() as conn:
+        try:
+            account.save_weights(conn, user["id"], form)
+        except settings.SettingsError as e:
+            return _render_account(request, conn, errors={"weights": e.errors}, status_code=400)
+    return RedirectResponse("/settings?saved=weights#weights", status_code=303)
+
+
+@app.post("/settings/weights/reset")
+def reset_own_weights(request: Request, conn: sqlite3.Connection = Depends(get_db)):
+    user = _require_user(request)
+    account.reset_weights(conn, user["id"])
+    return RedirectResponse("/settings?saved=weights#weights", status_code=303)
+
+
+@app.post("/settings/kalshi/{env}", response_class=HTMLResponse)
+async def save_kalshi_key(
+    request: Request,
+    env: str,
+    key_id: str = Form(""),
+    private_key: str = Form(""),
+    key_file: Optional[UploadFile] = File(None),
+):
+    """Save a Kalshi key: the private key pasted, or its .key file uploaded."""
+    user = _require_user(request)
+    if key_file is not None and key_file.filename:
+        private_key = (await key_file.read()).decode("utf-8", errors="replace")
+    with _db() as conn:
+        try:
+            account.save_kalshi_key(conn, user["id"], env, key_id, private_key)
+        except settings.SettingsError as e:
+            return _render_account(request, conn, errors={f"kalshi-{env}": e.errors}, status_code=400)
+    return RedirectResponse(f"/settings?saved=kalshi-{env}#kalshi", status_code=303)
+
+
+@app.post("/settings/kalshi/{env}/check", response_class=HTMLResponse)
+def check_kalshi_key(request: Request, env: str, conn: sqlite3.Connection = Depends(get_db)):
+    """Ask Kalshi for the account's balance with the saved key: proof it works."""
+    user = _require_user(request)
+    balance, error = account.check_kalshi_key(conn, user["id"], env)
+    return _render_account(request, conn, checked={"env": env, "balance": balance, "error": error})
+
+
+@app.post("/settings/kalshi/{env}/delete")
+def delete_kalshi_key(request: Request, env: str, conn: sqlite3.Connection = Depends(get_db)):
+    user = _require_user(request)
+    Accounts.delete_kalshi_key(conn, user["id"], env)
+    return RedirectResponse(f"/settings?saved=kalshi-{env}-removed#kalshi", status_code=303)
+
+
+# --- Admin: site-wide settings (the JSON config files; see webapp/settings.py) ---
 
 def _render_settings(request: Request, saved: Optional[str] = None, errors: Optional[dict] = None,
                      status_code: int = 200, suggested: Optional[dict] = None,
@@ -341,19 +495,19 @@ def _render_settings(request: Request, saved: Optional[str] = None, errors: Opti
         request, "settings.html",
         {"s": settings.view(), "saved": saved, "errors": errors or {},
          "suggested": suggested, "suggest_error": suggest_error, "applied": applied,
-         "ai_names": DEFAULT_LLM_NAMES, "active_tab": "settings"},
+         "ai_names": DEFAULT_LLM_NAMES, "active_tab": "admin", "admin_tab": "settings"},
         status_code=status_code,
     )
 
 
-@app.get("/settings", response_class=HTMLResponse)
-def settings_page(request: Request, saved: Optional[str] = None, applied: Optional[str] = None):
+@app.get("/admin/settings", response_class=HTMLResponse)
+def admin_settings_page(request: Request, saved: Optional[str] = None, applied: Optional[str] = None):
     _require_admin(request)
     return _render_settings(request, saved=saved if saved in settings.SAVERS else None,
                             applied=applied[:200] if applied else None)
 
 
-@app.post("/settings/suggestions", response_class=HTMLResponse)
+@app.post("/admin/settings/suggestions", response_class=HTMLResponse)
 def ask_for_suggestions(request: Request):
     """One Gemini call (with Google Search) for proposed updates, shown for review -- nothing is saved."""
     _require_admin(request)
@@ -364,17 +518,17 @@ def ask_for_suggestions(request: Request):
     return _render_settings(request, suggested=result)
 
 
-@app.post("/settings/suggestions/apply", response_class=HTMLResponse)
+@app.post("/admin/settings/suggestions/apply", response_class=HTMLResponse)
 async def apply_suggestions(request: Request):
     _require_admin(request)
     saved, errors = suggestions.apply(dict(await request.form()))
     if errors:
         return _render_settings(request, suggest_error="Some suggestions weren't applied: " + "; ".join(errors),
                                 applied=", ".join(saved) or None, status_code=400)
-    return RedirectResponse(f"/settings?applied={quote(', '.join(saved) or 'nothing')}", status_code=303)
+    return RedirectResponse(f"/admin/settings?applied={quote(', '.join(saved) or 'nothing')}", status_code=303)
 
 
-@app.post("/settings/{section}", response_class=HTMLResponse)
+@app.post("/admin/settings/{section}", response_class=HTMLResponse)
 async def save_settings(request: Request, section: str):
     _require_admin(request)
     saver = settings.SAVERS.get(section)
@@ -384,10 +538,10 @@ async def save_settings(request: Request, section: str):
         saver(dict(await request.form()))
     except settings.SettingsError as e:
         return _render_settings(request, errors={section: e.errors}, status_code=400)
-    return RedirectResponse(f"/settings?saved={section}#{section}", status_code=303)
+    return RedirectResponse(f"/admin/settings?saved={section}#{section}", status_code=303)
 
 
-@app.post("/settings/{section}/reset")
+@app.post("/admin/settings/{section}/reset")
 def reset_settings(request: Request, section: str):
     """Hosted only: drop the volume copy so the deployed file is in effect again."""
     _require_admin(request)
@@ -396,17 +550,80 @@ def reset_settings(request: Request, section: str):
         raise HTTPException(status_code=404, detail=f"No settings section {section!r}")
     import ConfigFiles
     ConfigFiles.reset(path)
-    return RedirectResponse(f"/settings?saved={section}#{section}", status_code=303)
+    return RedirectResponse(f"/admin/settings?saved={section}#{section}", status_code=303)
 
 
-# --- Admin betting tab: the auto-betting rules and how the bets did (see webapp/betting.py) ---
+# --- Admin: users (see webapp/users.py) ---
+
+def _render_users(request: Request, conn: sqlite3.Connection, message: Optional[str] = None,
+                  error: Optional[str] = None, new_password: Optional[dict] = None, status_code: int = 200):
+    return templates.TemplateResponse(
+        request, "admin_users.html",
+        {"users": users.view(conn), "message": message, "error": error, "new_password": new_password,
+         "ai_names": DEFAULT_LLM_NAMES, "active_tab": "admin", "admin_tab": "users"},
+        status_code=status_code,
+    )
+
+
+@app.get("/admin/users", response_class=HTMLResponse)
+def admin_users_page(request: Request, conn: sqlite3.Connection = Depends(get_db)):
+    _require_admin(request)
+    return _render_users(request, conn)
+
+
+@app.post("/admin/users", response_class=HTMLResponse)
+def add_user(request: Request, username: str = Form(""), is_admin: str = Form(""),
+             conn: sqlite3.Connection = Depends(get_db)):
+    _require_admin(request)
+    try:
+        user, password = users.create(conn, username, is_admin == "yes")
+    except Accounts.AccountError as e:
+        return _render_users(request, conn, error=str(e), status_code=400)
+    return _render_users(request, conn, new_password={"username": user["username"], "password": password,
+                                                      "created": True})
+
+
+@app.post("/admin/users/{user_id}/password", response_class=HTMLResponse)
+def reset_user_password(request: Request, user_id: int, conn: sqlite3.Connection = Depends(get_db)):
+    _require_admin(request)
+    password = users.reset_password(conn, user_id)
+    if password is None:
+        raise HTTPException(status_code=404, detail="No such user")
+    return _render_users(request, conn, new_password={"username": Accounts.get_user(conn, user_id)["username"],
+                                                      "password": password, "created": False})
+
+
+@app.post("/admin/users/{user_id}/admin", response_class=HTMLResponse)
+def set_user_admin(request: Request, user_id: int, is_admin: str = Form(""),
+                   conn: sqlite3.Connection = Depends(get_db)):
+    _require_admin(request)
+    try:
+        Accounts.set_admin(conn, user_id, is_admin == "yes")
+    except Accounts.AccountError as e:
+        return _render_users(request, conn, error=str(e), status_code=400)
+    return RedirectResponse("/admin/users", status_code=303)
+
+
+@app.post("/admin/users/{user_id}/delete", response_class=HTMLResponse)
+def remove_user(request: Request, user_id: int, conn: sqlite3.Connection = Depends(get_db)):
+    me = _require_admin(request)
+    if user_id == me["id"]:
+        return _render_users(request, conn, error="You can't remove your own account.", status_code=400)
+    try:
+        Accounts.delete_user(conn, user_id)
+    except Accounts.AccountError as e:
+        return _render_users(request, conn, error=str(e), status_code=400)
+    return RedirectResponse("/admin/users", status_code=303)
+
+
+# --- Betting tab: the signed-in user's own rules and bets (see webapp/betting.py) ---
 
 def _render_betting(request: Request, conn: sqlite3.Connection, saved: Optional[str] = None,
                     errors: Optional[list] = None, status_code: int = 200, shown: Optional[str] = None):
     return templates.TemplateResponse(
         request, "betting.html",
-        {"b": betting.view(conn, shown), "message": betting.flash(saved), "errors": errors or [],
-         "ai_names": DEFAULT_LLM_NAMES, "active_tab": "betting"},
+        {"b": betting.view(conn, request.state.user, shown), "message": betting.flash(saved),
+         "errors": errors or [], "ai_names": DEFAULT_LLM_NAMES, "active_tab": "betting"},
         status_code=status_code,
     )
 
@@ -414,8 +631,8 @@ def _render_betting(request: Request, conn: sqlite3.Connection, saved: Optional[
 @app.get("/betting", response_class=HTMLResponse)
 def betting_page(request: Request, saved: Optional[str] = None, bets: Optional[str] = None,
                  conn: sqlite3.Connection = Depends(get_db)):
-    """`bets` picks whose bets the page totals: paper, demo or live (default: the mode in effect)."""
-    _require_admin(request)
+    """`bets` picks which of the user's bets the page totals: paper, demo or live (default: the mode in effect)."""
+    _require_user(request)
     return _render_betting(request, conn, saved=saved, shown=bets)
 
 
@@ -434,31 +651,18 @@ def save_betting_rules(
     confirm_live: str = Form(""),
     conn: sqlite3.Connection = Depends(get_db),
 ):
-    _require_admin(request)
+    user = _require_user(request)
     try:
-        betting.save_config({"mode": mode, "min_edge": min_edge, "stake_usd": stake_usd,
-                             "max_daily_usd": max_daily_usd, "min_price": min_price, "max_price": max_price,
-                             "min_ais": min_ais, "leagues": leagues, "segments": segments,
-                             "confirm_live": confirm_live})
+        betting.save_config(conn, user["id"], {
+            "mode": mode, "min_edge": min_edge, "stake_usd": stake_usd, "max_daily_usd": max_daily_usd,
+            "min_price": min_price, "max_price": max_price, "min_ais": min_ais, "leagues": leagues,
+            "segments": segments, "confirm_live": confirm_live})
     except settings.SettingsError as e:
         return _render_betting(request, conn, errors=e.errors, status_code=400)
     return RedirectResponse("/betting?saved=rules#rules", status_code=303)
 
 
-@app.post("/betting/rules/reset")
-def reset_betting_rules(request: Request):
-    """Hosted only: drop the volume copy so the deployed betting.json is in effect again."""
-    _require_admin(request)
-    betting.reset_config()
-    return RedirectResponse("/betting?saved=reset#rules", status_code=303)
-
-
-# --- Admin data page: move history in, get generated spreadsheets out ---
-
-def _require_admin(request: Request) -> None:
-    if request.state.role != auth.ADMIN:
-        raise HTTPException(status_code=403, detail="Sign in to manage data")
-
+# --- Admin: data -- move history in, get generated spreadsheets out ---
 
 def _render_data_page(request: Request, message: Optional[str] = None, error: Optional[str] = None,
                       status_code: int = 200):
@@ -469,7 +673,7 @@ def _render_data_page(request: Request, message: Optional[str] = None, error: Op
         request, "admin_data.html",
         {"files": [f for f in files if f not in day_logs], "day_logs": day_logs, "spend": spend,
          "run": daily_run.status(), "message": message, "error": error,
-         "ai_names": DEFAULT_LLM_NAMES, "active_tab": "data"},
+         "ai_names": DEFAULT_LLM_NAMES, "active_tab": "admin", "admin_tab": "data"},
         status_code=status_code,
     )
 
@@ -504,6 +708,12 @@ def download_data_file(request: Request, name: str):
     path = data_files.resolve_download(name)
     if path is None:
         raise HTTPException(status_code=404, detail=f"No data file {name!r}")
+    if name == "predictions.db":
+        # The game history only: accounts, password hashes and Kalshi keys stay on the server.
+        fd, copy = tempfile.mkstemp(suffix=".db")
+        os.close(fd)
+        data_files.sanitized_db_copy(copy)
+        return FileResponse(copy, filename="predictions.db", background=BackgroundTask(os.remove, copy))
     return FileResponse(path, filename=os.path.basename(path))
 
 

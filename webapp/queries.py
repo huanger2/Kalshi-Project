@@ -83,6 +83,7 @@ def list_games(
     segment: Optional[str] = None,
     season_year: Optional[str] = None,
     league: Optional[str] = None,
+    weights: Optional[dict[str, float]] = None,
 ) -> list[dict]:
     """
     One row per tracked game, newest first. Pass game_date (ISO, e.g.
@@ -96,7 +97,9 @@ def list_games(
     is equivalent to grouping by game here. "AI odds" is each game's
     consensus_probability() across its predictions -- weighted by each
     prediction's own confidence and its AI's manually-configured weight
-    (AIWeights.py, 1.0 for every AI by default) -- not a bare average.
+    -- `weights`, the viewer's own (AIWeights.for_user()), else the
+    site-wide defaults (1.0 for every AI unless an admin changed them) --
+    not a bare average.
     """
     import AIWeights
     from EVCalculator import LLMPrediction, consensus_probability
@@ -121,7 +124,7 @@ def list_games(
     pred_sql = "SELECT ticker, llm, predicted_prob, confidence FROM predictions " + where
     for ticker, llm, predicted_prob, confidence in conn.execute(pred_sql, params).fetchall():
         predictions_by_ticker.setdefault(ticker, []).append(
-            LLMPrediction(llm, predicted_prob, confidence, weight=AIWeights.get_weight(llm))
+            LLMPrediction(llm, predicted_prob, confidence, weight=AIWeights.lookup(weights, llm))
         )
 
     games = []

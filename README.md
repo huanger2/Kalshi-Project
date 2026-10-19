@@ -270,17 +270,28 @@ Safe to re-run -- it only inserts rows for a (ticker, AI) pair it hasn't
 seen before, so running it again after a new day's file appears just adds
 that day.
 
-This is a first framework pass, not a finished product: one admin login,
-no pagination, plain server-rendered pages. Treat it as the foundation to
+This is a first framework pass, not a finished product: no pagination,
+plain server-rendered pages. Treat it as the foundation to
 build the "look at different markets" experience on, not the end state.
 
-### Settings tab
+### Settings: yours, and the site's
 
-Signed in as admin, the **Settings** tab edits the JSON config files from
-the browser: each AI's model (`ai_settings.json`), each AI's weight
-(`ai_weights.json`), model pricing (`model_pricing.json`), and each league's
-tracking and season dates (`leagues.json`). A section with an invalid value
-shows why and saves nothing.
+Settings come in two kinds:
+
+- **Yours** (the **Settings** tab, any signed-in user): your password, your
+  AI weights, and your Kalshi API keys. Your weights drive the "AI odds"
+  you see on every page and the bets placed for you; until you save your
+  own, you follow the site defaults. Your betting rules are on the
+  **Betting** tab. All of it is saved with your account in
+  `predictions.db` (see [`Accounts.py`](Accounts.py)), and nobody else sees
+  or uses it.
+- **The site's** (**Admin → Shared settings**, admins only): each AI's
+  model (`ai_settings.json`), the default AI weights for guests and anyone
+  who hasn't set their own (`ai_weights.json`), model pricing
+  (`model_pricing.json`), and each league's tracking and season dates
+  (`leagues.json`). These are the same for everyone.
+
+A section with an invalid value shows why and saves nothing.
 
 Locally, saving edits the file itself. Hosted (`DATA_DIR` set), saving
 writes a copy of the file to the volume that overrides the deployed one, so
@@ -288,7 +299,7 @@ it survives deploys. Edits to that file pushed from git then don't apply on
 the server until you click **Reset to repo version** (see
 [`ConfigFiles.py`](ConfigFiles.py)).
 
-**Ask Gemini for updates** (top of the Settings tab) has Gemini search the
+**Ask Gemini for updates** (top of Shared settings) has Gemini search the
 web for each AI's newest model, those models' prices, and announced league
 dates, then lists every proposed change next to the current value, with the
 sources it used. **Nothing is applied until you tick changes and click
@@ -305,9 +316,10 @@ four Gemini calls, logged in API spend; Google bills web search separately.
 
 ### Betting tab
 
-Signed in as admin, the **Betting** tab sets the rules for automatic bets
-(`betting.json`, see [`Betting.py`](Betting.py)) and shows how they've done.
-The mode says where bets go:
+Signed in, the **Betting** tab sets your own rules for automatic bets (see
+[`Betting.py`](Betting.py)) and shows how your bets have done. Every user
+has their own rules, bets, daily cap and balance chart; a new account
+starts with betting off. The mode says where your bets go:
 
 | Mode | |
 |---|---|
@@ -323,25 +335,21 @@ Kalshi's price and fee. Each mode's bets are counted separately (own daily
 cap, own totals; the tab switches between them), and Kalshi pays real
 positions out itself when the game settles.
 
-Demo and live each need their own Kalshi API key (the demo site issues
-separate keys). Create one under Account → API Keys, then put the key id
-and private key in `AIAPIKEYS.env` locally, or the service's Variables on
-Railway:
+Demo and live bets are placed from **your own Kalshi account**, so each
+needs your own API key (the demo site issues separate keys from the real
+one). Create one on Kalshi under Account → API Keys, then add its ID and
+private key on your **Settings** tab (paste it, or upload the `.key` file).
+**Check it works** asks Kalshi for the account's balance. The private key
+is stored encrypted and never shown again.
 
-| Variable | |
-|---|---|
-| `KALSHI_API_KEY_ID` / `KALSHI_API_KEY` | live: the key id, and the private key's PEM text (pasting it onto one line is fine) |
-| `KALSHI_PRIVATE_KEY_PATH` | live, instead of `KALSHI_API_KEY`: path to the `.key` file (default `kalshi.key`) |
-| `KALSHI_DEMO_API_KEY_ID` / `KALSHI_DEMO_API_KEY` | demo: the same, for the demo account |
-| `KALSHI_DEMO_PRIVATE_KEY_PATH` | demo, instead of `KALSHI_DEMO_API_KEY` |
+The rules can't be saved in demo or live mode without that mode's key, and
+switching to live also needs its confirmation box ticked. The tab shows
+your account's cash balance. Try a few days on demo before going live.
 
-The rules can't be saved in demo or live mode without that mode's keys, and
-switching to live also needs its confirmation box ticked. The tab shows the
-account's cash balance. Try a few days on demo before going live.
-
-Each time the daily run logs a game, it compares the AI odds (the same
-weighted consensus as the "AI odds" column) with what a contract costs right
-now on each side, which is the ask, not the midpoint:
+Each time the daily run logs a game, it compares each betting user's AI
+odds (the same weighted consensus as the "AI odds" column, with their own
+weights) with what a contract costs right now on each side, which is the
+ask, not the midpoint:
 
     edge(YES) = AI odds - yes_ask           (backing the listed team)
     edge(NO)  = (1 - AI odds) - no_ask      (backing its opponent)
@@ -377,39 +385,63 @@ Besides totals and the bet list, the tab shows:
   day's biggest edges, as in the daily run.
 - **Breakdowns** split your bets' results by league, side and edge.
 
-Saving the rules works like the Settings tab: locally it edits
-`betting.json`, and hosted it saves a copy on the volume.
+Your rules are saved with your account. `betting.json` is only read once,
+to give the first admin the rules the site had before accounts existed.
 
-### Signing in
+### Accounts and signing in
 
 The first page a visitor sees is a sign-in screen: sign in, or **Continue
-as guest** to browse everything read-only. Only a signed-in admin sees and
-can use the league tracking switches; a guest who posts to one anyway gets
-a 403. The JSON `/api/` endpoints stay open (read-only, and Railway's
-health check uses one).
+as guest** to browse everything read-only (with the default AI weights).
+The JSON `/api/` endpoints stay open (read-only, and Railway's health check
+uses one).
 
-There's a single admin login, read from two environment variables:
+| | Can |
+|---|---|
+| Guest | browse markets and AI pages |
+| User | also: their own Betting tab, and Settings (password, AI weights, Kalshi keys) |
+| Admin | also: **Admin** (shared settings, users, data) and the league tracking switches |
+
+**Nobody signs up on their own.** An admin adds people under **Admin →
+Users**, which shows a temporary password once; the new user picks their
+own the first time they sign in. Admins can also reset someone's password,
+make them an admin, or remove them (their bets stay in the history). A
+sign-in lasts 30 days; changing a password signs that user out everywhere
+else. Five wrong passwords in a row lock that username out for 15 minutes
+from that address.
+
+**The first admin** comes from two environment variables, the single login
+this app used before accounts existed:
 
 | Variable | |
 |---|---|
-| `USERNAME` | the admin username |
-| `PASSWORD` | the admin password |
-| `SESSION_SECRET` | optional: signs the login cookie. Defaults to a key derived from `PASSWORD`, so changing the password signs everyone out |
+| `USERNAME` | the first admin's username |
+| `PASSWORD` | their password (change it on the Settings tab afterwards) |
 
-With either unset, nobody can sign in (guests still can). A sign-in lasts
-30 days.
+The first sign-in (or daily run) with no accounts yet creates that admin and
+moves the old setup onto it: `betting.json`'s rules, the `KALSHI_*` keys in
+`AIAPIKEYS.env` (or Railway's Variables), and every bet placed so far. After
+that, `USERNAME`/`PASSWORD` and the `KALSHI_*` variables aren't used and can
+be removed.
 
 **Windows already sets `USERNAME`** to your Windows account name, so locally
-it isn't free to choose. To sign in to a local copy, set both in the shell
-you start the server from (this only affects that window):
+the first admin gets that name unless you set it in the shell you start the
+server from:
 
 ```powershell
 $env:USERNAME = "your-admin-name"; $env:PASSWORD = "your-password"
 py -m webapp
 ```
 
-On Railway, set them in the service's **Variables** tab. A Linux container
-doesn't predefine `USERNAME`.
+Two server secrets, both optional but recommended when hosted:
+
+| Variable | |
+|---|---|
+| `SECRETS_KEY` | encrypts users' saved Kalshi keys. Any long random string. Unset, a key is generated into `secrets.key` in the data folder; lose it (or change `SECRETS_KEY`) and saved keys can't be decrypted, so users would re-enter them |
+| `SESSION_SECRET` | signs the login cookie. Unset, one is generated into the database |
+
+Accounts live in `predictions.db` with everything else. Downloading it from
+the Data page leaves the account tables out, and uploading a replacement
+keeps the server's own accounts.
 
 ### Hosting on Railway
 
@@ -452,12 +484,15 @@ straight from Kalshi, even without its day's spreadsheet on the server.
 1. Attach a volume to it, mounted at `/data`.
 2. In its **Variables**, set:
    - `DATA_DIR=/data`
-   - `USERNAME` and `PASSWORD` (the admin login)
+   - `USERNAME` and `PASSWORD` (creates the first admin; see Accounts and
+     signing in)
+   - `SECRETS_KEY`: another long random secret, made the same way as the
+     token below (it encrypts users' Kalshi keys)
    - `DAILY_RUN_TOKEN`: a long random secret, e.g. from
      `py -c "import secrets; print(secrets.token_urlsafe(32))"`
    - your `AIAPIKEYS.env` and `EmailAlerts.env` contents (Raw Editor accepts
      them as-is)
-3. Sign in, open **Data** (top right), and upload your `predictions.db`,
+3. Sign in, open **Admin → Data**, and upload your `predictions.db`,
    plus any recent `daily_logs/*.xlsx` you want on the server.
 
 **Cron service:**
@@ -483,7 +518,7 @@ Once a Railway run has succeeded, remove the Windows task
 (`.\schedule_task.ps1 -Uninstall`), so the two don't both pay for every
 AI call each morning, into two diverging databases.
 
-The **Data** page (admin only) also lists everything the daily run
+The **Admin → Data** page also lists everything the daily run
 generates for download, plus a `predictions.xlsx` of every prediction,
 built fresh when downloaded.
 
@@ -579,8 +614,9 @@ day's run catches it up.
 | `Leagues.py`, `leagues.json` | The tracked leagues: Kalshi series, season calendars, which ones are enabled |
 | `ClaudeAi.py`, `OpenAi.py`, `Gemini.py` | One wrapper per AI API |
 | `AISettings.py`, `ai_settings.json` | Which model each AI uses |
-| `AIWeights.py`, `ai_weights.json` | Each AI's manually adjustable weight for the AI-odds consensus probability |
-| `Betting.py`, `betting.json` | Paper betting rules: which games get a bet, its size and Kalshi fee, and its result |
+| `Accounts.py` | Users, their own settings (betting rules, AI weights) and encrypted Kalshi keys; the first admin |
+| `AIWeights.py`, `ai_weights.json` | Each AI's weight for the AI-odds consensus: site defaults, and each user's own |
+| `Betting.py`, `betting.json` | Per-user betting: which games get a bet, its size and Kalshi fee, placing it, and its result (`betting.json` only seeds the first admin) |
 | `Probability.py` | Builds the prompt, parses AI replies, runs the EV analysis |
 | `EVCalculator.py` | Confidence-weighted expected-value score vs. the market price, and the AI-odds consensus probability |
 | `Tracker.py`, `Export.py`, `Collect.py` | SQLite prediction tracking (the webapp's data source too), accuracy weights, Excel export |

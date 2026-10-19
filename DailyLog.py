@@ -332,13 +332,18 @@ def todays_rows(
         for market in get_todays_games(league, today):
             games.setdefault(market["event_ticker"], []).append(market)
 
-    bet_rules = None
+    # Everyone with betting turned on, each with their own rules, weights and
+    # Kalshi key (Betting.bettors()); first making sure the single-login
+    # era's admin exists, since this may run before anyone has signed in.
+    bettors = []
     if db_conn is not None:
         try:
-            bet_rules = Betting.load_config()
+            import Accounts
+            Accounts.bootstrap(db_conn)
+            bettors = Betting.bettors(db_conn)
         except Exception as e:
             print(f"no bets today: could not read the betting rules: {e}")
-    bets = []
+    bets: dict[int, list[dict]] = {b["user_id"]: [] for b in bettors}
 
     rows = []
     for event, markets in games.items():
@@ -387,30 +392,32 @@ def todays_rows(
                 )
             except Exception as e:
                 print(f"could not record {event} in predictions.db: {e}")
-            # Paper bets (betting.json) -- best-effort too: a betting problem
-            # mustn't cost the game its spreadsheet row or its predictions.
-            if bet_rules is not None:
+            # Bets, per user -- best-effort too: a betting problem mustn't
+            # cost the game its spreadsheet row or its predictions.
+            for bettor in bettors:
                 try:
-                    bet = Betting.candidate(db_conn, market, predictions, prices, today.isoformat(),
-                                            opponent=opponent, config=bet_rules)
+                    bet = Betting.candidate(db_conn, bettor, market, predictions, prices, today.isoformat(),
+                                            opponent=opponent)
                     if bet:
-                        bets.append(bet)
+                        bets[bettor["user_id"]].append(bet)
                 except Exception as e:
-                    print(f"could not consider a bet on {event}: {e}")
+                    print(f"could not consider a bet for {bettor['username']} on {event}: {e}")
 
-    # Placed once every game is in, so the daily cap goes to the biggest edges.
-    if bets:
-        try:
-            Betting.place(db_conn, bets, bet_rules)
-        except Exception as e:
-            print(f"could not place today's bets: {e}")
-    # A demo/live account's balance after today's bets, for the Betting tab's chart.
-    if bet_rules is not None and bet_rules["mode"] in Betting.TRADING_MODES:
-        try:
-            import Kalshi
-            Betting.record_balance(db_conn, bet_rules["mode"], Kalshi.get_balance(bet_rules["mode"]), force=True)
-        except Exception as e:
-            print(f"could not record the Kalshi {bet_rules['mode']} balance: {e}")
+    # Placed once every game is in, so each user's daily cap goes to their biggest edges.
+    for bettor in bettors:
+        if bets[bettor["user_id"]]:
+            try:
+                Betting.place(db_conn, bettor, bets[bettor["user_id"]])
+            except Exception as e:
+                print(f"could not place {bettor['username']}'s bets today: {e}")
+        # A demo/live account's balance after today's bets, for the Betting tab's chart.
+        if bettor["creds"] is not None:
+            try:
+                import Kalshi
+                Betting.record_balance(db_conn, bettor["user_id"], bettor["config"]["mode"],
+                                       Kalshi.get_balance(bettor["creds"]), force=True)
+            except Exception as e:
+                print(f"could not record {bettor['username']}'s Kalshi {bettor['config']['mode']} balance: {e}")
     return rows
 
 

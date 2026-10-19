@@ -1,4 +1,4 @@
-"""Paper, demo and live betting (Betting.py), its hook in the daily run, and the Betting tab (webapp/betting.py)."""
+"""Paper, demo and live betting per user (Betting.py), its hook in the daily run, and the Betting tab (webapp/betting.py)."""
 
 import json
 import os
@@ -10,8 +10,10 @@ from unittest import mock
 
 from fastapi.testclient import TestClient
 
+import Accounts
 import AIWeights
 import Betting
+import Kalshi
 import Tracker
 from EVCalculator import LLMPrediction
 from tests.test_daily_log import LLMS, OCT4, TODAY_MARKETS, DailyLogTestCase, game_market
@@ -22,26 +24,47 @@ RULES = {**Betting.DEFAULTS, "mode": "paper", "min_edge": 0.05, "stake_usd": 5.0
          "min_price": 0.10, "max_price": 0.90, "min_ais": 2, "leagues": ["NBA", "NFL"]}
 
 
-class BettingConfigTestCase(unittest.TestCase):
-    """A throwaway betting.json, and every AI weighted 1.0 whatever ai_weights.json says."""
+def _add_user(db_path, name="admin", rules=None, admin=True, password="s3cret") -> int:
+    """A user in the test database, with `rules` as their betting rules. Returns their id."""
+    conn = Tracker.connect(db_path)
+    try:
+        uid = Accounts.create_user(conn, name, password, is_admin=admin, check_rules=False)["id"]
+        if rules is not None:
+            Accounts.set_setting(conn, uid, "betting", rules)
+        return uid
+    finally:
+        conn.close()
 
-    rules = RULES
+
+def _set_rules(db_path, uid, rules):
+    conn = Tracker.connect(db_path)
+    try:
+        Accounts.set_setting(conn, uid, "betting", rules)
+    finally:
+        conn.close()
+
+
+def fake_credentials(conn, user_id, env):
+    """Stands in for a saved Kalshi key: Kalshi.buy/get_balance are mocked wherever it's used."""
+    return Kalshi.Credentials(env, f"key-{user_id}", object())
+
+
+def fake_key_info(conn, user_id, env):
+    return {"key_id": f"key-{user_id}", "saved_at": "2026-10-01T09:00:00"}
+
+
+class BettingConfigTestCase(unittest.TestCase):
+    """A throwaway data folder, and every AI weighted 1.0 whatever ai_weights.json says."""
 
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.dir = Path(tmp.name)
-        self.config_path = self.dir / "betting.json"
-        self.config_path.write_text(json.dumps(self.rules), encoding="utf-8")
-        for patcher in (mock.patch.object(Betting, "BETTING_PATH", self.config_path),
-                        mock.patch.object(AIWeights, "get_weight", return_value=1.0),
+        for patcher in (mock.patch.object(AIWeights, "get_weight", return_value=1.0),
                         mock.patch.dict("os.environ")):
             patcher.start()
             self.addCleanup(patcher.stop)
         os.environ.pop("DATA_DIR", None)
-
-    def set_rules(self, **changes):
-        self.config_path.write_text(json.dumps({**self.rules, **changes}), encoding="utf-8")
 
 
 class FeeTests(unittest.TestCase):
@@ -153,15 +176,15 @@ class DailyRunBettingTests(DailyLogTestCase):
 
     def setUp(self):
         super().setUp()
-        self.config_path = Path(self.folder).parent / "betting.json"
-        for patcher in (mock.patch.object(Betting, "BETTING_PATH", self.config_path),
-                        mock.patch.object(AIWeights, "get_weight", return_value=1.0)):
+        for patcher in (mock.patch.object(AIWeights, "get_weight", return_value=1.0),
+                        mock.patch.object(Accounts, "kalshi_credentials", side_effect=fake_credentials)):
             patcher.start()
             self.addCleanup(patcher.stop)
+        self.uid = _add_user(self.db_path, "bettor", admin=False)
         self.set_rules(min_edge=0.02)
 
-    def set_rules(self, **changes):
-        self.config_path.write_text(json.dumps({**RULES, **changes}), encoding="utf-8")
+    def set_rules(self, uid=None, **changes):
+        _set_rules(self.db_path, uid or self.uid, {**RULES, **changes})
 
     def bets(self):
         conn = Tracker.connect(self.db_path)
@@ -170,6 +193,10 @@ class DailyRunBettingTests(DailyLogTestCase):
                                 "FROM bets ORDER BY id").fetchall()
         finally:
             conn.close()
+
+    def bettor(self, conn, **rules):
+        return {"user_id": self.uid, "username": "bettor", "config": {**RULES, **rules},
+                "weights": None, "creds": fake_credentials(conn, self.uid, rules.get("mode", "paper"))}
 
     def test_a_game_with_enough_edge_gets_a_paper_bet(self):
         self.run_day(OCT4, TODAY_MARKETS[:2])
@@ -193,6 +220,37 @@ class DailyRunBettingTests(DailyLogTestCase):
         self.run_day(OCT4, TODAY_MARKETS[:2])
         self.assertEqual(self.bets(), [])
 
+    def test_a_new_user_bets_nothing_until_they_turn_it_on(self):
+        conn = Tracker.connect(self.db_path)
+        try:
+            Accounts.delete_setting(conn, self.uid, "betting")  # never saved any rules: mode off
+        finally:
+            conn.close()
+        self.run_day(OCT4, TODAY_MARKETS[:2])
+        self.assertEqual(self.bets(), [])
+
+    def test_each_user_bets_by_their_own_rules(self):
+        # A second user with a stricter threshold gets no bet on the 2.5 point edge.
+        other = _add_user(self.db_path, "careful", admin=False)
+        self.set_rules(uid=other, min_edge=0.05)
+        self.run_day(OCT4, TODAY_MARKETS[:2])
+        conn = Tracker.connect(self.db_path)
+        try:
+            owners = conn.execute("SELECT user_id FROM bets").fetchall()
+        finally:
+            conn.close()
+        self.assertEqual(owners, [(self.uid,)])
+
+    def test_each_users_own_ai_weights_decide_their_bets(self):
+        # Weighting out the two keenest AIs leaves 55%: a NO edge of 5 points (45% vs 40c), not YES.
+        conn = Tracker.connect(self.db_path)
+        try:
+            Accounts.set_setting(conn, self.uid, "ai_weights", {"openai": 0, "claude": 0, "gemini": 1})
+        finally:
+            conn.close()
+        self.run_day(OCT4, TODAY_MARKETS[:2])
+        self.assertEqual([b[2] for b in self.bets()], ["no"])
+
     def test_the_daily_cap_goes_to_the_biggest_edge_not_the_first_game(self):
         # Two games, each about $5 with its fee. Denver's (logged first) YES edge
         # is 2.5 points; Golden State's (59-cent ask) is 5.5, so it gets the money.
@@ -207,7 +265,7 @@ class DailyRunBettingTests(DailyLogTestCase):
         self.assertEqual([b[0] for b in self.bets()], ["KXNBAGAME-26OCT04UTADEN-DEN"])
 
     def test_a_betting_failure_still_logs_the_game(self):
-        for name in ("candidate", "place", "load_config"):
+        for name in ("candidate", "place", "load_config", "bettors"):
             with self.subTest(failing=name), \
                  mock.patch.object(Betting, name, side_effect=RuntimeError("boom")):
                 sheet = self.run_day(OCT4, TODAY_MARKETS[:2])
@@ -220,8 +278,8 @@ class DailyRunBettingTests(DailyLogTestCase):
             preds = [LLMPrediction("OpenAI", 0.8, 1.0), LLMPrediction("Claude", 0.8, 1.0)]
             prices = {"yes_ask": 0.50, "no_ask": 0.52}
             with mock.patch("builtins.print"):
-                self.assertIsNotNone(Betting.consider(conn, market, preds, prices, "2026-10-04"))
-                self.assertIsNone(Betting.consider(conn, market, preds, prices, "2026-10-04"))
+                self.assertIsNotNone(Betting.consider(conn, self.bettor(conn), market, preds, prices, "2026-10-04"))
+                self.assertIsNone(Betting.consider(conn, self.bettor(conn), market, preds, prices, "2026-10-04"))
         finally:
             conn.close()
 
@@ -229,16 +287,19 @@ class DailyRunBettingTests(DailyLogTestCase):
         self.set_rules(mode=mode, min_edge=0.02)
         # A partial fill a cent better than the 62-cent ask the rules were checked against.
         fill = {"order_id": f"{mode}-1", "count": 6, "price": 0.61, "cost": 3.66, "fee": 0.06}
-        with mock.patch("Kalshi.buy", return_value=fill) as buy:
+        with mock.patch("Kalshi.buy", return_value=fill) as buy, mock.patch("Kalshi.get_balance", return_value=1.0):
             self.run_day(OCT4, TODAY_MARKETS[:2])
-        buy.assert_called_once_with("KXNBAGAME-26OCT04UTADEN-DEN", "yes", 8, 0.62, env=mode)
+        buy.assert_called_once_with("KXNBAGAME-26OCT04UTADEN-DEN", "yes", 8, 0.62, mock.ANY)
+        creds = buy.call_args.args[4]
+        self.assertEqual((creds.env, creds.key_id), (mode, f"key-{self.uid}"))  # this user's key for this exchange
         conn = Tracker.connect(self.db_path)
         try:
-            row = conn.execute("SELECT mode, count, price, cost, fee, order_id, edge FROM bets").fetchone()
+            row = conn.execute("SELECT mode, count, price, cost, fee, order_id, edge, user_id FROM bets").fetchone()
         finally:
             conn.close()
         self.assertEqual(row[:6], (mode, 6, 0.61, 3.66, 0.06, f"{mode}-1"))
         self.assertAlmostEqual(row[6], 0.0347, places=3)  # the edge at the price actually paid
+        self.assertEqual(row[7], self.uid)
 
     def test_demo_bets_are_sent_to_kalshi_and_recorded_as_filled(self):
         self.assert_sent_and_recorded_as_filled("demo")
@@ -246,13 +307,21 @@ class DailyRunBettingTests(DailyLogTestCase):
     def test_live_bets_are_sent_to_kalshi_and_recorded_as_filled(self):
         self.assert_sent_and_recorded_as_filled("live")
 
+    def test_demo_or_live_without_a_saved_key_places_nothing(self):
+        self.set_rules(mode="demo", min_edge=0.02)
+        with mock.patch.object(Accounts, "kalshi_credentials", return_value=None), \
+             mock.patch("Kalshi.buy", side_effect=AssertionError("sent without a key")):
+            self.assertEqual(len(self.run_day(OCT4, TODAY_MARKETS[:2])), 1)
+        self.assertEqual(self.bets(), [])
+
     def test_a_demo_run_records_the_balance_even_without_bets(self):
         self.set_rules(mode="demo", min_edge=0.5)
         with mock.patch("Kalshi.get_balance", return_value=187.25):
             self.run_day(OCT4, TODAY_MARKETS[:2])
         conn = Tracker.connect(self.db_path)
         try:
-            self.assertEqual(conn.execute("SELECT mode, balance FROM balance_history").fetchall(), [("demo", 187.25)])
+            self.assertEqual(conn.execute("SELECT user_id, mode, balance FROM balance_history").fetchall(),
+                             [(self.uid, "demo", 187.25)])
         finally:
             conn.close()
 
@@ -270,7 +339,8 @@ class DailyRunBettingTests(DailyLogTestCase):
         self.set_rules(mode="demo", min_edge=0.02)
         nothing = {"order_id": "o", "count": 0, "price": 0.62, "cost": 0.0, "fee": 0.0}
         for result in ({"return_value": nothing}, {"side_effect": RuntimeError("HTTP 400 insufficient_balance")}):
-            with self.subTest(**{k: str(v) for k, v in result.items()}), mock.patch("Kalshi.buy", **result):
+            with self.subTest(**{k: str(v) for k, v in result.items()}), mock.patch("Kalshi.buy", **result), \
+                 mock.patch("Kalshi.get_balance", return_value=1.0):
                 sheet = self.run_day(OCT4, TODAY_MARKETS[:2])
                 self.assertEqual(len(sheet), 1)  # the game is still logged
                 self.assertEqual(self.bets(), [])
@@ -285,16 +355,16 @@ class DailyRunBettingTests(DailyLogTestCase):
             fill = {"order_id": "o", "count": 10, "price": 0.50, "cost": 5.0, "fee": 0.18}
             with mock.patch("builtins.print"), mock.patch("Kalshi.buy", return_value=fill) as buy:
                 for mode in ("paper", "demo"):
-                    rules = {**RULES, "mode": mode, "max_daily_usd": 6.0}
-                    self.assertIsNotNone(Betting.consider(conn, market, preds, prices, "2026-10-04", config=rules))
+                    bettor = self.bettor(conn, mode=mode, max_daily_usd=6.0)
+                    self.assertIsNotNone(Betting.consider(conn, bettor, market, preds, prices, "2026-10-04"))
         finally:
             conn.close()
         self.assertEqual(buy.call_count, 1)
         self.assertEqual([b[1] for b in self.bets()], ["paper", "demo"])
 
 
-def _seed(db_path, games, bets=()):
-    """games: (ticker, league, yes_bid, yes_ask, ai_prob, outcome, tied); bets: (ticker, side, price, count)."""
+def _seed(db_path, games, bets=(), user_id=None):
+    """games: (ticker, league, yes_bid, yes_ask, ai_prob, outcome, tied); bets: (ticker, side, price, count), owned by user_id."""
     conn = Tracker.connect(db_path)
     try:
         for ticker, league, yes_bid, yes_ask, ai_prob, outcome, tied in games:
@@ -306,10 +376,10 @@ def _seed(db_path, games, bets=()):
                     (ticker, league, yes_bid, yes_ask, llm, ai_prob, (yes_bid + yes_ask) / 2, outcome, tied))
         for ticker, side, price, count in bets:
             conn.execute(
-                "INSERT INTO bets (created_at, mode, ticker, league, game_date, team, opponent, side, price, count, "
-                " cost, fee, ai_prob, edge) VALUES ('2026-10-04T12:00', 'paper', ?, 'NBA', '2026-10-04', 'Home', "
-                " 'Away', ?, ?, ?, ?, ?, 0.7, 0.08)",
-                (ticker, side, price, count, price * count, Betting.fee(count, price)))
+                "INSERT INTO bets (created_at, user_id, mode, ticker, league, game_date, team, opponent, side, price, "
+                " count, cost, fee, ai_prob, edge) VALUES ('2026-10-04T12:00', ?, 'paper', ?, 'NBA', '2026-10-04', "
+                " 'Home', 'Away', ?, ?, ?, ?, ?, 0.7, 0.08)",
+                (user_id, ticker, side, price, count, price * count, Betting.fee(count, price)))
         conn.commit()
     finally:
         conn.close()
@@ -331,9 +401,10 @@ class BettingViewTests(BettingConfigTestCase):
     def setUp(self):
         super().setUp()
         self.db_path = str(self.dir / "predictions.db")
+        self.uid = _add_user(self.db_path, rules=RULES)
         _seed(self.db_path, GAMES, bets=[("KXNBAGAME-26OCT04AAABBB-AAA", "yes", 0.60, 8),
                                          ("KXNBAGAME-26OCT04CCCDDD-CCC", "yes", 0.60, 8),
-                                         ("KXNBAGAME-26OCT04GGGHHH-GGG", "yes", 0.50, 10)])
+                                         ("KXNBAGAME-26OCT04GGGHHH-GGG", "yes", 0.50, 10)], user_id=self.uid)
         self.conn = Tracker.connect(self.db_path)
         self.addCleanup(self.conn.close)
 
@@ -342,27 +413,34 @@ class BettingViewTests(BettingConfigTestCase):
                 {"game_date": "2026-10-04", "status": "won", "pnl": 3.0},
                 {"game_date": "2026-10-04", "status": "won", "pnl": 1.5},
                 {"game_date": "2026-10-06", "status": "pending", "pnl": None}]
-        self.assertEqual(betting.balance_series(self.conn, "paper", bets), {
+        self.assertEqual(betting.balance_series(self.conn, self.uid, "paper", bets), {
             "kind": "pnl", "points": [{"x": "2026-10-04", "y": 4.5}, {"x": "2026-10-05", "y": -0.6}]})
 
     def test_demo_and_live_balance_comes_from_recorded_snapshots(self):
+        other = Accounts.create_user(self.conn, "other", "password1")["id"]
         with mock.patch("datetime.datetime") as dt:
-            for when, mode, value in (("2026-10-04T09:00:00", "demo", 200.0), ("2026-10-04T10:00:00", "demo", 200.0),
-                                      ("2026-10-04T11:00:00", "demo", 195.04), ("2026-10-04T12:00:00", "live", 50.0),
-                                      ("2026-10-05T09:00:00", "demo", 195.04)):
+            for when, uid, mode, value in (
+                    ("2026-10-04T09:00:00", self.uid, "demo", 200.0), ("2026-10-04T10:00:00", self.uid, "demo", 200.0),
+                    ("2026-10-04T11:00:00", self.uid, "demo", 195.04), ("2026-10-04T12:00:00", self.uid, "live", 50.0),
+                    ("2026-10-04T13:00:00", other, "demo", 999.0), ("2026-10-05T09:00:00", self.uid, "demo", 195.04)):
                 dt.now.return_value.isoformat.return_value = when
-                Betting.record_balance(self.conn, mode, value)
+                Betting.record_balance(self.conn, uid, mode, value)
         # 10:00 repeated 9:00's value the same day, so it was skipped; the next day's repeat wasn't.
-        self.assertEqual(betting.balance_series(self.conn, "demo", [])["points"], [
+        # The other user's account isn't in this user's line.
+        self.assertEqual(betting.balance_series(self.conn, self.uid, "demo", [])["points"], [
             {"x": "2026-10-04T09:00:00", "y": 200.0}, {"x": "2026-10-04T11:00:00", "y": 195.04},
             {"x": "2026-10-05T09:00:00", "y": 195.04}])
 
     def test_bets_get_their_result_from_the_game(self):
-        statuses = {b["ticker"][-3:]: b["status"] for b in betting.list_bets(self.conn)}
+        statuses = {b["ticker"][-3:]: b["status"] for b in betting.list_bets(self.conn, self.uid)}
         self.assertEqual(statuses, {"AAA": "won", "CCC": "lost", "GGG": "pending"})
 
+    def test_only_the_users_own_bets(self):
+        other = Accounts.create_user(self.conn, "other", "password1")["id"]
+        self.assertEqual(betting.list_bets(self.conn, other), [])
+
     def test_summary(self):
-        s = betting.summarize(betting.list_bets(self.conn))
+        s = betting.summarize(betting.list_bets(self.conn, self.uid))
         fee = Betting.fee(8, 0.60)
         self.assertEqual((s["bets"], s["pending"], s["won"], s["lost"]), (3, 1, 1, 1))
         self.assertAlmostEqual(s["pnl"], (8 - 4.8 - fee) + (-4.8 - fee))
@@ -389,7 +467,7 @@ class BettingViewTests(BettingConfigTestCase):
         self.assertEqual({r["bets"] for r in rows}, {0})
 
     def test_breakdowns_group_by_league_side_and_edge(self):
-        groups = {g["title"]: g["rows"] for g in betting.breakdowns(betting.list_bets(self.conn))}
+        groups = {g["title"]: g["rows"] for g in betting.breakdowns(betting.list_bets(self.conn, self.uid))}
         self.assertEqual([r["label"] for r in groups["League"]], ["NBA"])
         self.assertEqual(groups["Side"][0]["bets"], 3)
         self.assertEqual([r["label"] for r in groups["Edge when placed"]], ["5-10 pts"])
@@ -399,7 +477,8 @@ class BettingPageTests(BettingConfigTestCase):
     def setUp(self):
         super().setUp()
         self.db_path = str(self.dir / "predictions.db")
-        _seed(self.db_path, GAMES, bets=[("KXNBAGAME-26OCT04AAABBB-AAA", "yes", 0.60, 8)])
+        self.uid = _add_user(self.db_path, rules=RULES)  # "admin" / "s3cret"
+        _seed(self.db_path, GAMES, bets=[("KXNBAGAME-26OCT04AAABBB-AAA", "yes", 0.60, 8)], user_id=self.uid)
 
         def override_get_db():
             conn = Tracker.connect(self.db_path)
@@ -410,12 +489,18 @@ class BettingPageTests(BettingConfigTestCase):
 
         app.dependency_overrides[get_db] = override_get_db
         self.addCleanup(app.dependency_overrides.pop, get_db, None)
-        os.environ.update({"USERNAME": "admin", "PASSWORD": "s3cret"})
         os.environ.pop("SESSION_SECRET", None)
         self.client = TestClient(app)
 
-    def sign_in(self):
-        self.client.post("/login", data={"username": "admin", "password": "s3cret", "next": "/"})
+    def sign_in(self, username="admin", password="s3cret"):
+        self.client.post("/login", data={"username": username, "password": password, "next": "/"})
+
+    def rules(self, uid=None):
+        conn = Tracker.connect(self.db_path)
+        try:
+            return Betting.load_config(conn, uid or self.uid)
+        finally:
+            conn.close()
 
     def valid_form(self, **changes):
         form = {"mode": "paper", "min_edge": "7.5", "stake_usd": "10", "max_daily_usd": "100", "min_price": "15",
@@ -424,11 +509,11 @@ class BettingPageTests(BettingConfigTestCase):
         form.update(changes)
         return form
 
-    def test_admin_only(self):
+    def test_guests_are_kept_out(self):
         self.client.post("/guest")
         self.assertEqual(self.client.get("/betting").status_code, 403)
         self.assertEqual(self.client.post("/betting/rules", data=self.valid_form()).status_code, 403)
-        self.assertEqual(json.loads(self.config_path.read_text())["min_edge"], 0.05)
+        self.assertEqual(self.rules()["min_edge"], 0.05)
 
     def test_page_shows_rules_stats_backtest_and_bets(self):
         self.sign_in()
@@ -443,41 +528,47 @@ class BettingPageTests(BettingConfigTestCase):
         self.sign_in()
         r = self.client.post("/betting/rules", data=self.valid_form(), follow_redirects=False)
         self.assertEqual(r.status_code, 303)
-        saved = json.loads(self.config_path.read_text())
-        self.assertEqual({k: saved[k] for k in RULES}, {
+        self.assertEqual({k: self.rules()[k] for k in RULES}, {
             "mode": "paper", "min_edge": 0.075, "stake_usd": 10.0, "max_daily_usd": 100.0, "min_price": 0.15,
             "max_price": 0.85, "min_ais": 3, "leagues": ["NBA", "NHL"],
             "segments": ["regular", "postseason"]})
         self.assertIn("Rules saved.", self.client.get(r.headers["location"]).text)
 
+    def test_a_non_admin_user_has_their_own_rules_and_bets(self):
+        other = _add_user(self.db_path, "friend", admin=False, password="friend-pass")
+        self.sign_in("friend", "friend-pass")
+        page = self.client.get("/betting").text
+        self.assertNotIn("Home vs Away", page)  # the admin's bet
+        self.assertIn("Betting is off", page)  # a new user starts with betting off
+        self.client.post("/betting/rules", data=self.valid_form(min_edge="12"))
+        self.assertEqual(self.rules(other)["min_edge"], 0.12)
+        self.assertEqual(self.rules()["min_edge"], 0.05)  # the admin's rules didn't change
+
     def test_invalid_rules_save_nothing(self):
         self.sign_in()
-        before = self.config_path.read_text()
         r = self.client.post("/betting/rules", data=self.valid_form(mode="live", min_price="90", stake_usd="abc"))
         self.assertEqual(r.status_code, 400)
         for text in ("Mode:", "lowest price", "Dollars per bet"):
             self.assertIn(text, r.text)
-        self.assertEqual(self.config_path.read_text(), before)
+        self.assertEqual(self.rules()["min_edge"], 0.05)
 
-    def test_live_needs_its_box_ticked_and_demo_or_live_need_keys(self):
+    def test_live_needs_its_box_ticked_and_demo_or_live_need_a_saved_key(self):
         self.sign_in()
-        before = self.config_path.read_text()
-        with mock.patch("Kalshi.has_credentials", return_value=True):
+        with mock.patch.object(Accounts, "kalshi_key_info", side_effect=fake_key_info):
             r = self.client.post("/betting/rules", data=self.valid_form(mode="live"))
             self.assertEqual(r.status_code, 400)
             self.assertIn("real money", r.text)
-            self.assertEqual(self.config_path.read_text(), before)
+            self.assertEqual(self.rules()["mode"], "paper")
             self.client.post("/betting/rules", data=self.valid_form(mode="live", confirm_live="yes"))
-            self.assertEqual(json.loads(self.config_path.read_text())["mode"], "live")
-        with mock.patch("Kalshi.has_credentials", return_value=False):
-            r = self.client.post("/betting/rules", data=self.valid_form(mode="demo"))
+            self.assertEqual(self.rules()["mode"], "live")
+        r = self.client.post("/betting/rules", data=self.valid_form(mode="demo"))  # no demo key saved
         self.assertEqual(r.status_code, 400)
-        self.assertIn("KALSHI_DEMO_API_KEY_ID", r.text)
+        self.assertIn("Kalshi demo API key", r.text)
 
     def test_demo_mode_shows_the_balance_and_keeps_each_modes_bets_apart(self):
-        self.config_path.write_text(json.dumps({**RULES, "mode": "demo"}), encoding="utf-8")
+        _set_rules(self.db_path, self.uid, {**RULES, "mode": "demo"})
         self.sign_in()
-        with mock.patch("Kalshi.has_credentials", return_value=True), \
+        with mock.patch.object(Accounts, "kalshi_credentials", side_effect=fake_credentials), \
              mock.patch("Kalshi.get_balance", return_value=250.5):
             page = self.client.get("/betting").text
             self.assertIn("$250.50", page)
@@ -487,10 +578,17 @@ class BettingPageTests(BettingConfigTestCase):
             self.assertIn('href="/betting?bets=paper"', page)
             self.assertIn("Home vs Away", self.client.get("/betting?bets=paper").text)
 
-    def test_a_balance_failure_is_shown_not_raised(self):
-        self.config_path.write_text(json.dumps({**RULES, "mode": "live"}), encoding="utf-8")
+    def test_demo_mode_without_a_key_says_where_to_add_one(self):
+        _set_rules(self.db_path, self.uid, {**RULES, "mode": "demo"})
         self.sign_in()
-        with mock.patch("Kalshi.has_credentials", return_value=True), \
+        page = self.client.get("/betting").text
+        self.assertIn('href="/settings#kalshi"', page)
+        self.assertIn("no Kalshi demo key saved", page)
+
+    def test_a_balance_failure_is_shown_not_raised(self):
+        _set_rules(self.db_path, self.uid, {**RULES, "mode": "live"})
+        self.sign_in()
+        with mock.patch.object(Accounts, "kalshi_credentials", side_effect=fake_credentials), \
              mock.patch("Kalshi.get_balance", side_effect=RuntimeError("HTTP 401")):
             r = self.client.get("/betting")
         self.assertEqual(r.status_code, 200)
@@ -502,29 +600,18 @@ class BettingPageTests(BettingConfigTestCase):
         self.assertIn("Paper balance over time", page)
         self.assertIn('id="balance-data"', page)  # the one settled paper bet is a point
         self.assertIn("/static/balance-chart.js", page)
-        self.config_path.write_text(json.dumps({**RULES, "mode": "demo"}), encoding="utf-8")
-        with mock.patch("Kalshi.has_credentials", return_value=True), \
+        _set_rules(self.db_path, self.uid, {**RULES, "mode": "demo"})
+        with mock.patch.object(Accounts, "kalshi_credentials", side_effect=fake_credentials), \
              mock.patch("Kalshi.get_balance", return_value=250.5):
             page = self.client.get("/betting").text  # this view records a first snapshot
         self.assertIn("Kalshi demo balance over time", page)
         self.assertIn('"y": 250.5', page)
 
-    def test_hosted_saves_go_to_the_volume(self):
-        volume = self.dir / "volume"
-        volume.mkdir()
-        os.environ["DATA_DIR"] = str(volume)
-        self.sign_in()
-        self.client.post("/betting/rules", data=self.valid_form())
-        self.assertEqual(json.loads((volume / "betting.json").read_text())["min_edge"], 0.075)
-        self.assertEqual(json.loads(self.config_path.read_text())["min_edge"], 0.05)
-        self.client.post("/betting/rules/reset")
-        self.assertFalse((volume / "betting.json").exists())
-
 
 class RepoConfigTests(unittest.TestCase):
-    def test_the_shipped_betting_json_is_valid_paper_betting(self):
+    def test_the_shipped_betting_json_is_valid_first_admin_rules(self):
         config = json.loads(Path(Betting.BETTING_PATH).read_text(encoding="utf-8"))
-        self.assertEqual(config["mode"], "paper")
+        self.assertIn(config["mode"], Betting.MODES)
         self.assertEqual(set(Betting.DEFAULTS) - set(config), set())
 
 

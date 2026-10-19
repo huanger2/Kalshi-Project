@@ -26,8 +26,8 @@
                     <button type="button" data-theme-choice="dark" aria-pressed="false" title="Dark theme">Dark</button>
                     <button type="button" data-theme-choice="auto" aria-pressed="true" title="Follow the system setting">Auto</button>
                 </div>
-                {% if request.state.role == "admin" %}
-                    <span>Signed in</span>
+                {% if request.state.user %}
+                    <span>Signed in as <strong class="who">{{ request.state.user.username }}</strong></span>
                     <form method="post" action="/logout"><button type="submit" class="link-button">Sign out</button></form>
                 {% elif request.state.role %}
                     <span>Guest</span>
@@ -50,16 +50,25 @@
             {% for name in ai_names %}
                 <a href="/ai/{{ name }}" class="{% if active_tab == name %}active{% endif %}">{{ name }}</a>
             {% endfor %}
-            {% if request.state.role == "admin" %}
+            {% if request.state.user %}
                 <span class="tab-divider" aria-hidden="true"></span>
                 <a href="/betting" class="{% if active_tab == 'betting' %}active{% endif %}">Betting</a>
                 <a href="/settings" class="{% if active_tab == 'settings' %}active{% endif %}">Settings</a>
-                <a href="/admin/data" class="{% if active_tab == 'data' %}active{% endif %}">Data</a>
+                {% if request.state.role == "admin" %}
+                <a href="/admin/settings" class="{% if active_tab == 'admin' %}active{% endif %}">Admin</a>
+                {% endif %}
             {% endif %}
         </div>
     </nav>
     {% endif %}
     <main>
+        {% if active_tab == "admin" %}
+        <nav class="mode-switch admin-nav" aria-label="Admin pages">
+            <a href="/admin/settings" {% if admin_tab == "settings" %}class="active" aria-current="page"{% endif %}>Shared settings</a>
+            <a href="/admin/users" {% if admin_tab == "users" %}class="active" aria-current="page"{% endif %}>Users</a>
+            <a href="/admin/data" {% if admin_tab == "data" %}class="active" aria-current="page"{% endif %}>Data</a>
+        </nav>
+        {% endif %}
         {% block content %}{% endblock %}
     </main>
     <script>
