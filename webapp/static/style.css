@@ -153,6 +153,7 @@ body {
 .table-heading { font-size: 0.9rem; margin: 1.1rem 0 0.25rem; color: var(--muted); }
 .table-heading:first-of-type { margin-top: 0; }
 .current-row td { background: #f3f6fe; font-weight: 600; }
+.api-spend .total-row td { font-weight: 700; border-top: 1px solid var(--border); }
 .table-scroll { overflow-x: auto; }
 @media (max-width: 560px) {
     .settings-grid { grid-template-columns: 1fr; }

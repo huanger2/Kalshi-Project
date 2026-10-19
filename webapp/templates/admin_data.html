@@ -60,6 +60,46 @@
 </section>
 
 <section class="panel">
+    <h2>API spend</h2>
+    {% if spend %}
+    <div class="table-scroll">
+    <table class="api-spend">
+        <thead>
+            <tr><th>Provider</th><th>Calls</th><th>Input tokens</th><th>Output tokens</th><th>Cost</th><th>Unpriced calls</th></tr>
+        </thead>
+        <tbody>
+            {% for p in spend %}
+            <tr>
+                <td>{{ p.provider }}</td>
+                <td>{{ "{:,}".format(p.calls) }}</td>
+                <td>{{ "{:,}".format(p.input_tokens) }}</td>
+                <td>{{ "{:,}".format(p.output_tokens) }}</td>
+                <td>{% if p.cost_usd is none %}<span class="muted">unknown</span>{% else %}${{ "%.2f" | format(p.cost_usd) }}{% endif %}</td>
+                <td>{{ p.unpriced_calls }}</td>
+            </tr>
+            {% endfor %}
+            {% if spend | length > 1 %}
+            {% set priced = spend | rejectattr("cost_usd", "none") | list %}
+            <tr class="total-row">
+                <td>Total</td>
+                <td>{{ "{:,}".format(spend | sum(attribute="calls")) }}</td>
+                <td>{{ "{:,}".format(spend | sum(attribute="input_tokens")) }}</td>
+                <td>{{ "{:,}".format(spend | sum(attribute="output_tokens")) }}</td>
+                <td>{% if priced %}${{ "%.2f" | format(priced | sum(attribute="cost_usd")) }}{% else %}<span class="muted">unknown</span>{% endif %}</td>
+                <td>{{ spend | sum(attribute="unpriced_calls") }}</td>
+            </tr>
+            {% endif %}
+        </tbody>
+    </table>
+    </div>
+    <p class="note">Since tracking started. Cost is estimated from model_pricing.json; calls for a model
+        with no price there are counted as unpriced and left out of the cost.</p>
+    {% else %}
+    <p class="empty">No AI calls logged yet.</p>
+    {% endif %}
+</section>
+
+<section class="panel">
     <h2>Upload</h2>
 
     <form class="upload-form" method="post" action="/admin/data/predictions-db" enctype="multipart/form-data">

@@ -25,6 +25,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTex
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+import CostTracker
 import Leagues
 import Tracker
 from DailyLog import DEFAULT_LLM_NAMES
@@ -459,9 +460,10 @@ def _render_data_page(request: Request, message: Optional[str] = None, error: Op
                       status_code: int = 200):
     files = data_files.listing()
     day_logs = [f for f in files if f["name"].startswith("daily_logs/")]  # newest first, one dropdown
+    spend = CostTracker.usage_summary(data_files.db_path())  # api_costs.xlsx's provider_summary sheet
     return templates.TemplateResponse(
         request, "admin_data.html",
-        {"files": [f for f in files if f not in day_logs], "day_logs": day_logs,
+        {"files": [f for f in files if f not in day_logs], "day_logs": day_logs, "spend": spend,
          "run": daily_run.status(), "message": message, "error": error,
          "ai_names": DEFAULT_LLM_NAMES, "active_tab": "data"},
         status_code=status_code,

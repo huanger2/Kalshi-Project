@@ -14,6 +14,7 @@ from unittest import mock
 import openpyxl
 from fastapi.testclient import TestClient
 
+import CostTracker
 import DataDir
 import Leagues
 import Tracker
@@ -354,6 +355,28 @@ class AdminDataPageTests(WebAppHostingTestCase):
         r = self.client.get("/admin/data/download", params={"name": "daily_logs/2026-10-04.xlsx"})
         self.assertEqual(r.content, data)
         self.assertEqual(self.client.get("/admin/data/download", params={"name": "../leagues.json"}).status_code, 404)
+
+    def test_api_spend_summary(self):
+        self.sign_in()
+        self.assertIn("No AI calls logged yet", self.client.get("/admin/data").text)
+
+        conn = sqlite3.connect(self.db_path)
+        conn.executescript(CostTracker.SCHEMA)
+        conn.executemany(
+            "INSERT INTO api_usage (created_at, provider, model, input_tokens, output_tokens, cost_usd) "
+            "VALUES ('2026-10-18T00:00:00+00:00', ?, 'm', ?, ?, ?)",
+            [("claude", 1000, 200, 0.5), ("claude", 1500, 300, 0.25), ("gemini", 400, 100, None)],
+        )
+        conn.commit()
+        conn.close()
+
+        page = self.client.get("/admin/data").text
+        self.assertIn("API spend", page)
+        self.assertIn("2,500", page)    # claude's input tokens
+        self.assertIn("$0.75", page)    # claude's cost, and the total (gemini is unpriced)
+        self.assertIn("unknown", page)  # gemini's cost
+        self.assertIn('class="total-row"', page)
+        self.assertNotIn("No AI calls logged yet", page)
 
     def test_downloads(self):
         self.sign_in()
