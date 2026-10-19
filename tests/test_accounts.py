@@ -337,13 +337,16 @@ class OwnSettingsTests(AccountsPageTestCase):
         self.record_game()
         self.sign_in("pat", "pat-password")
         self.assertIn(">60%<", self.client.get("/").text.replace(" ", "").replace("\n", ""))  # equal weights
-        self.client.post("/settings/weights", data={"weight::openai": "1", "weight::claude": "0", "weight::gemini": "1"})
+        self.client.post("/betting/rules", data={
+            "mode": "off", "min_edge": "5", "stake_usd": "5", "max_daily_usd": "50", "min_price": "10",
+            "max_price": "90", "min_ais": "2", "leagues": ["NBA"], "segments": ["regular"],
+            "weight::openai": "1", "weight::claude": "0", "weight::gemini": "1"})
         self.assertIn(">80%<", self.client.get("/").text.replace(" ", "").replace("\n", ""))  # OpenAI only
         self.client.post("/logout")
         self.client.post("/guest")
         self.assertIn(">60%<", self.client.get("/").text.replace(" ", "").replace("\n", ""))  # guests: the defaults
         self.sign_in("pat", "pat-password")
-        self.client.post("/settings/weights/reset")
+        self.client.post("/betting/weights/reset")
         with self.db() as conn:
             self.assertIsNone(Accounts.get_setting(conn, self.user["id"], "ai_weights"))
 

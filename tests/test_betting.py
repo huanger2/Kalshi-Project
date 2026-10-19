@@ -544,6 +544,78 @@ class BettingPageTests(BettingConfigTestCase):
         self.assertEqual(self.rules(other)["min_edge"], 0.12)
         self.assertEqual(self.rules()["min_edge"], 0.05)  # the admin's rules didn't change
 
+    def test_weights_are_saved_with_the_rules(self):
+        self.sign_in()
+        self.client.post("/betting/rules", data=self.valid_form(**{"weight::openai": "2", "weight::claude": "1",
+                                                                  "weight::gemini": "0.5"}))
+        conn = Tracker.connect(self.db_path)
+        try:
+            self.assertEqual(Accounts.get_setting(conn, self.uid, "ai_weights"),
+                             {"openai": 2.0, "claude": 1.0, "gemini": 0.5})
+        finally:
+            conn.close()
+        page = self.client.get("/betting").text
+        self.assertIn('name="weight::openai"', page)
+        self.assertIn("Go back to the site defaults", page)
+        self.client.post("/betting/weights/reset")
+        conn = Tracker.connect(self.db_path)
+        try:
+            self.assertIsNone(Accounts.get_setting(conn, self.uid, "ai_weights"))
+        finally:
+            conn.close()
+
+    def test_saving_rules_with_the_default_weights_keeps_following_the_defaults(self):
+        self.sign_in()
+        self.client.post("/betting/rules", data=self.valid_form(**{"weight::openai": "1", "weight::claude": "1",
+                                                                  "weight::gemini": "1"}))
+        conn = Tracker.connect(self.db_path)
+        try:
+            self.assertIsNone(Accounts.get_setting(conn, self.uid, "ai_weights"))  # no frozen copy of the defaults
+        finally:
+            conn.close()
+
+    def test_all_zero_weights_are_refused(self):
+        self.sign_in()
+        r = self.client.post("/betting/rules", data=self.valid_form(**{"weight::openai": "0", "weight::claude": "0",
+                                                                      "weight::gemini": "0"}))
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("At least one AI", r.text)
+
+    def test_preview_replays_unsaved_values_without_saving(self):
+        self.sign_in()
+        form = self.valid_form(min_edge="15", segments=["preseason"], leagues=["NBA"],
+                               **{"weight::openai": "1", "weight::claude": "1", "weight::gemini": "1"})
+        r = self.client.post("/betting/preview", data=form)
+        self.assertEqual(r.status_code, 200)
+        data = r.json()
+        self.assertIn('class="current-row"', data["rows_html"])
+        self.assertIn("15%", data["rows_html"])  # the unsaved threshold is the marked row
+        self.assertEqual(data["games"], 3)  # GAMES' three settled preseason games
+        self.assertIsNotNone(data["brier"])
+        self.assertEqual(self.rules()["min_edge"], 0.05)  # nothing saved
+
+    def test_preview_weights_change_the_replay(self):
+        self.sign_in()
+        base = self.valid_form(min_edge="0", min_price="10", max_price="90", segments=["preseason"])
+        even = self.client.post("/betting/preview", data={**base, "weight::openai": "1", "weight::claude": "1",
+                                                          "weight::gemini": "1"}).json()
+        # GAMES give both AIs the same probability, so weighting changes nothing -- but zeroing Claude
+        # mustn't break anything either: the replay and score come back for the same games.
+        tilted = self.client.post("/betting/preview", data={**base, "weight::openai": "1", "weight::claude": "0",
+                                                            "weight::gemini": "1"}).json()
+        self.assertEqual(even["games"], tilted["games"])
+        self.assertAlmostEqual(even["brier"], tilted["brier"])
+
+    def test_preview_reports_invalid_fields(self):
+        self.sign_in()
+        r = self.client.post("/betting/preview", data=self.valid_form(min_price="95", max_price="20"))
+        self.assertEqual(r.status_code, 422)
+        self.assertIn("lowest price", " ".join(r.json()["errors"]))
+
+    def test_guests_cannot_preview(self):
+        self.client.post("/guest")
+        self.assertEqual(self.client.post("/betting/preview", data=self.valid_form()).status_code, 403)
+
     def test_invalid_rules_save_nothing(self):
         self.sign_in()
         r = self.client.post("/betting/rules", data=self.valid_form(mode="live", min_price="90", stake_usd="abc"))

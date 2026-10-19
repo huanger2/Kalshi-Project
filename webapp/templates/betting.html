@@ -1,16 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Betting - AI vs Kalshi{% endblock %}
 
-{% macro money(x) -%}
-    {%- if x is none -%}&mdash;{%- else -%}{{ "-" if x < 0 }}${{ "%.2f" | format(x | abs) }}{%- endif -%}
-{%- endmacro %}
-{% macro signed(x) -%}
-    {%- if x is none -%}<span class="muted">&mdash;</span>
-    {%- else -%}<span class="{{ 'edge-up' if x > 0 else 'edge-down' if x < 0 }}">{{ "+" if x > 0 }}{{ money(x) }}</span>{%- endif -%}
-{%- endmacro %}
-{% macro pct(x, digits=1) -%}
-    {%- if x is none -%}&mdash;{%- else -%}{{ ("%." ~ digits ~ "f") | format(x * 100) }}%{%- endif -%}
-{%- endmacro %}
+{% from "_format.html" import money, signed, pct %}
 
 {% block content %}
 {% set mode_names = {"off": "Off", "paper": "Paper", "demo": "Kalshi demo", "live": "Live"} %}
@@ -112,7 +103,8 @@
     <h2>Rules</h2>
     <p class="subtitle">Edge is the AI odds for a side minus what one contract on that side costs (its ask), in
         points. Each game's better side is bet if its edge clears the minimum; when more games qualify than
-        the daily cap covers, the biggest edges get the money. Changes apply from the next daily run.</p>
+        the daily cap covers, the biggest edges get the money. Changes apply from the next daily run; the
+        <a href="#backtest">What if?</a> numbers follow your edits as you type, before you save.</p>
     {% if message %}<p class="form-message" role="status">{{ message }}</p>{% endif %}
     {% for e in errors %}{% if loop.first %}<div class="form-error" role="alert">Nothing was saved:<ul>{% endif %}
         <li>{{ e }}</li>{% if loop.last %}</ul></div>{% endif %}{% endfor %}
@@ -122,7 +114,8 @@
         <a href="/settings#kalshi">manage them</a>).
     </p>
 
-    <form class="settings-form" method="post" action="/betting/rules">
+    {% if b.custom_weights %}<form id="reset-weights" method="post" action="/betting/weights/reset"></form>{% endif %}
+    <form class="settings-form" id="rules-form" method="post" action="/betting/rules">
         <div class="settings-grid">
             <label for="mode">Mode</label>
             <select id="mode" name="mode" class="settings-select">
@@ -160,12 +153,36 @@
                 {% endfor %}
             </div>
         </div>
-        <button type="submit" class="button inline primary">Save rules</button>
+
+        <h3 class="form-subhead" id="weights">AI weights</h3>
+        <p class="note">How much each AI counts in your AI odds -- here, in the bets placed for you, and on every page
+            you view. 1.0 each is equal weighting; 0 leaves an AI out.
+            {% if b.custom_weights %}Using your own weights.
+                <button type="submit" form="reset-weights" class="link-button">Go back to the site defaults</button>
+            {% else %}Following the site defaults; saving different ones makes them yours.{% endif %}</p>
+        <div class="settings-grid">
+            {% for p in b.providers %}
+                <label for="weight-{{ p.key }}">{{ p.name }}</label>
+                <div>
+                    <input id="weight-{{ p.key }}" name="weight::{{ p.key }}" type="number" step="0.05" min="0" max="10"
+                           value="{{ '%g' | format(p.weight) }}" required>
+                    {% if p.weight != p.default %}<span class="muted default-hint">site default {{ '%g' | format(p.default) }}</span>{% endif %}
+                </div>
+            {% endfor %}
+            <span class="settings-label">AI odds' Brier score</span>
+            <div><strong id="weights-brier">{% if b.weights_brier.brier is none %}&mdash;{% else %}{{ "%.4f" | format(b.weights_brier.brier) }}{% endif %}</strong>
+                <span class="muted default-hint">lower is better, 0.25 is a coin flip; on the
+                    <span id="weights-brier-games">{{ b.weights_brier.games }}</span> settled games in these leagues and parts of the season</span></div>
+        </div>
+        <div class="form-actions">
+            <button type="submit" class="button inline primary">Save rules and weights</button>
+            <span class="preview-status" id="preview-status" role="status" aria-live="polite"></span>
+        </div>
     </form>
 </section>
 
 <section class="panel" id="backtest">
-    <h2>What if?</h2>
+    <div class="panel-head"><h2>What if?</h2><span class="pill pending" id="preview-badge" hidden>Unsaved changes</span></div>
     <p class="subtitle">These rules replayed over all {{ b.settled_games }} settled game{{ "" if b.settled_games == 1 else "s" }}
         logged so far, at the prices when each was logged, for different minimum edges. Each day's cap goes to that day's biggest edges.</p>
     {% if not b.settled_games %}
@@ -174,17 +191,8 @@
     <div class="table-scroll">
     <table class="settings-table">
         <thead><tr><th>Min edge</th><th>Bets</th><th>Win rate</th><th>Staked</th><th>P&amp;L</th><th>ROI</th></tr></thead>
-        <tbody>
-            {% for r in b.backtest %}
-            <tr{% if r.current %} class="current-row"{% endif %}>
-                <td>{{ pct(r.min_edge, 0) }}{% if r.current %} <span class="pill neutral">current</span>{% endif %}</td>
-                <td>{{ r.bets }}</td>
-                <td>{{ pct(r.win_rate, 0) }}</td>
-                <td>{{ money(r.staked) }}</td>
-                <td>{{ signed(r.pnl if r.bets else none) }}</td>
-                <td>{{ pct(r.roi) }}</td>
-            </tr>
-            {% endfor %}
+        <tbody id="backtest-rows">
+            {% with rows = b.backtest %}{% include "_backtest_rows.html" %}{% endwith %}
         </tbody>
     </table>
     </div>
@@ -253,4 +261,5 @@
 
 {% endblock %}
 
-{% block scripts %}<script src="/static/balance-chart.js?v={{ static_version() }}" defer></script>{% endblock %}
+{% block scripts %}<script src="/static/balance-chart.js?v={{ static_version() }}" defer></script>
+<script src="/static/betting-preview.js?v={{ static_version() }}" defer></script>{% endblock %}

@@ -1,18 +1,17 @@
 """
 webapp/account.py
 
-A signed-in user's own Settings page: their password, their AI weights
-(which drive the AI odds they see and the bets placed for them), and their
-Kalshi API keys. Everything here belongs to one user (Accounts.py); the
-site-wide settings are on the Admin tab (webapp/settings.py).
+A signed-in user's own Settings page: their password and their Kalshi API
+keys. (Their AI weights sit with their betting rules on the Betting tab.)
+Everything here belongs to one user (Accounts.py); the site-wide settings
+are on the Admin tab (webapp/settings.py).
 """
 
 import sqlite3
 from typing import Mapping, Optional
 
 import Accounts
-import AIWeights
-from webapp.settings import MAX_WEIGHT, PROVIDERS, SettingsError, _number
+from webapp.settings import SettingsError
 
 KALSHI_ENV_NAMES = {"demo": "Kalshi demo (play money)", "live": "Live Kalshi (real money)"}
 
@@ -21,32 +20,12 @@ def view(conn: sqlite3.Connection, user: dict) -> dict:
     """Everything the Settings page shows for `user`."""
     import Betting
 
-    own = Accounts.get_setting(conn, user["id"], "ai_weights") or {}
-    defaults = AIWeights.defaults()
-    mine = AIWeights.for_user(conn, user["id"])
     mode = Betting.load_config(conn, user["id"])["mode"]
     return {
         "user": user,
-        "providers": [{"key": key, "name": name, "weight": mine.get(key, 1.0), "default": defaults.get(key, 1.0),
-                       "own": key in own} for key, name in PROVIDERS],
-        "custom_weights": bool(own),
         "kalshi": [{"env": env, "name": KALSHI_ENV_NAMES[env], "key": Accounts.kalshi_key_info(conn, user["id"], env),
                     "in_use": mode == env} for env in Accounts.KALSHI_ENVS],
     }
-
-
-def save_weights(conn: sqlite3.Connection, user_id: int, form: Mapping[str, str]) -> None:
-    errors: list[str] = []
-    weights = {key: _number(form.get(f"weight::{key}", ""), f"{name} weight", errors,
-                            maximum=MAX_WEIGHT, required=True) for key, name in PROVIDERS}
-    if errors:
-        raise SettingsError(errors)
-    Accounts.set_setting(conn, user_id, "ai_weights", weights)
-
-
-def reset_weights(conn: sqlite3.Connection, user_id: int) -> None:
-    """Back to following the site-wide default weights."""
-    Accounts.delete_setting(conn, user_id, "ai_weights")
 
 
 def change_password(conn: sqlite3.Connection, user: dict, form: Mapping[str, str]) -> None:

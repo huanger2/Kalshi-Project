@@ -11,8 +11,9 @@
 
 <section class="panel">
     <h1>Settings</h1>
-    <p class="subtitle">Yours alone, {{ u.username }}: nobody else sees or uses them. Site-wide settings like the AI
-        models and league dates are {% if u.is_admin %}on the <a href="/admin/settings">Admin tab</a>{% else %}set by an admin{% endif %}.</p>
+    <p class="subtitle">Yours alone, {{ u.username }}: nobody else sees or uses them. Your betting rules and AI weights
+        are on the <a href="/betting#rules">Betting tab</a>. Site-wide settings like the AI models and league dates are
+        {% if u.is_admin %}on the <a href="/admin/settings">Admin tab</a>{% else %}set by an admin{% endif %}.</p>
 </section>
 
 <div class="panel-row">
@@ -41,30 +42,7 @@
     </form>
 </section>
 
-<section class="panel" id="weights">
-    <h2>AI weights</h2>
-    <p class="subtitle">How much each AI counts in the "AI odds" you see on every page, and in the bets placed for you.
-        1.0 each is equal weighting; 0 leaves an AI out.</p>
-    {% if saved == "weights" %}<p class="form-message" role="status">Saved.</p>{% endif %}
-    {{ errors_for("weights") }}
-    <p class="note">{% if a.custom_weights %}Using your own weights.
-        <button type="submit" form="reset-weights" class="link-button">Go back to the site defaults</button>
-        {% else %}Following the site defaults; saving makes these your own.{% endif %}</p>
-    {% if a.custom_weights %}<form id="reset-weights" method="post" action="/settings/weights/reset"></form>{% endif %}
-    <form class="settings-form" method="post" action="/settings/weights">
-        <div class="settings-grid">
-            {% for p in a.providers %}
-                <label for="weight-{{ p.key }}">{{ p.name }}</label>
-                <div>
-                    <input id="weight-{{ p.key }}" name="weight::{{ p.key }}" type="number" step="0.05" min="0" max="10"
-                           value="{{ p.weight }}" required>
-                    {% if a.custom_weights and p.weight != p.default %}<span class="muted default-hint">site default {{ p.default }}</span>{% endif %}
-                </div>
-            {% endfor %}
-        </div>
-        <button type="submit" class="button inline primary">Save weights</button>
-    </form>
-</section>
+
 </div>
 
 <section class="panel" id="kalshi">

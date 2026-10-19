@@ -23,7 +23,7 @@ import Betting
 import Kalshi
 import Leagues
 from webapp import queries
-from webapp.settings import SettingsError, _number
+from webapp.settings import MAX_WEIGHT, PROVIDERS, SettingsError, _number
 
 BACKTEST_EDGES = [0.0, 0.02, 0.04, 0.06, 0.08, 0.10, 0.15, 0.20]
 EDGE_BUCKETS = [(0.0, 0.05, "Under 5 pts"), (0.05, 0.10, "5-10 pts"), (0.10, 0.15, "10-15 pts"),
@@ -198,26 +198,31 @@ def view(conn: sqlite3.Connection, user: dict, shown: Optional[str] = None) -> d
         "breakdowns": breakdowns(bets),
         "backtest": backtest(conn, config, weights),
         "settled_games": settled_games,
+        "providers": [{"key": key, "name": name, "weight": weights.get(key, 1.0),
+                       "default": AIWeights.defaults().get(key, 1.0)} for key, name in PROVIDERS],
+        "custom_weights": Accounts.get_setting(conn, uid, "ai_weights") is not None,
+        "weights_brier": _brier(conn, config, weights),
     }
 
 
-def save_config(conn: sqlite3.Connection, user_id: int, form: Mapping) -> None:
+def _parse(conn: sqlite3.Connection, user_id: int, form: Mapping, check_mode: bool = True) -> tuple[dict, Optional[dict]]:
     """
-    Validate the rules form and save it as the user's betting rules; any
-    invalid field raises SettingsError, saving nothing. Every field is a
-    string except "leagues" and "segments", the lists of checked league
-    codes and season segments.
+    The rules form as (rules, weights), or SettingsError listing every
+    problem. Every field is a string except "leagues" and "segments", the
+    lists of checked league codes and season segments. weights is None when
+    the form has no weight fields (e.g. the Analytics tab applying rules).
 
-    Switching to live (real money) also needs "confirm_live" ticked, and
-    demo/live need the user to have saved a Kalshi key for that exchange.
+    With check_mode, switching to live (real money) also needs
+    "confirm_live" ticked, and demo/live need the user's Kalshi key for that
+    exchange; a preview skips that, since the mode doesn't change a replay.
     """
     errors: list[str] = []
     mode = form.get("mode", "")
     if mode not in Betting.MODES:
         errors.append(f"Mode: {mode!r} isn't one of {', '.join(Betting.MODES)}.")
-    elif mode in Betting.TRADING_MODES and Accounts.kalshi_key_info(conn, user_id, mode) is None:
+    elif check_mode and mode in Betting.TRADING_MODES and Accounts.kalshi_key_info(conn, user_id, mode) is None:
         errors.append(f"Mode: {mode} needs your Kalshi {mode} API key -- add it on the Settings tab first.")
-    elif (mode == "live" and Betting.load_config(conn, user_id)["mode"] != "live"
+    elif (check_mode and mode == "live" and Betting.load_config(conn, user_id)["mode"] != "live"
           and form.get("confirm_live") != "yes"):
         errors.append("Mode: tick the box confirming live bets spend real money.")
 
@@ -237,13 +242,58 @@ def save_config(conn: sqlite3.Connection, user_id: int, form: Mapping) -> None:
         errors.append("The lowest price can't be above the highest price.")
     leagues = [code for code in Leagues.LEAGUES if code in (form.get("leagues") or [])]
     segments = [seg for seg in Betting.SEGMENTS if seg in (form.get("segments") or [])]
+
+    weights = None
+    if any(f"weight::{key}" in form for key, _ in PROVIDERS):
+        weights = {key: _number(form.get(f"weight::{key}", ""), f"{name} weight", errors,
+                                maximum=MAX_WEIGHT, required=True) for key, name in PROVIDERS}
+        if not errors and not any(weights.values()):
+            errors.append("At least one AI needs a weight above 0.")
     if errors:
         raise SettingsError(errors)
 
-    Accounts.set_setting(conn, user_id, "betting", {
-        "mode": mode, "min_edge": min_edge, "stake_usd": stake, "max_daily_usd": daily, "min_price": min_price,
-        "max_price": max_price, "min_ais": int(min_ais), "leagues": leagues, "segments": segments})
+    rules = {"mode": mode, "min_edge": min_edge, "stake_usd": stake, "max_daily_usd": daily, "min_price": min_price,
+             "max_price": max_price, "min_ais": int(min_ais), "leagues": leagues, "segments": segments}
+    return rules, weights
+
+
+def save_config(conn: sqlite3.Connection, user_id: int, form: Mapping) -> None:
+    """
+    Validate the rules form and save the user's betting rules, and their AI
+    weights if the form has them; any invalid field raises SettingsError,
+    saving nothing. Weights are only stored as the user's own when they
+    differ from what's in effect, so saving rules doesn't turn the site
+    defaults into a frozen personal copy.
+    """
+    rules, weights = _parse(conn, user_id, form)
+    Accounts.set_setting(conn, user_id, "betting", rules)
+    if weights is not None and weights != AIWeights.for_user(conn, user_id):
+        Accounts.set_setting(conn, user_id, "ai_weights", weights)
+
+
+def reset_weights(conn: sqlite3.Connection, user_id: int) -> None:
+    """Back to following the site-wide default weights."""
+    Accounts.delete_setting(conn, user_id, "ai_weights")
+
+
+def _brier(conn: sqlite3.Connection, rules: dict, weights: dict) -> dict:
+    """The AI odds' Brier score with `weights`, on the settled games in the rules' leagues and season parts."""
+    import Optimizer
+
+    games = [g for g in Optimizer.load_games(conn, rules["segments"]) if g["league"] in rules["leagues"]]
+    return {"brier": Optimizer.brier(games, weights), "games": len(Optimizer._scored(games))}
+
+
+def preview(conn: sqlite3.Connection, user_id: int, form: Mapping) -> dict:
+    """
+    The what-if replay and the AI odds' Brier score for the rules form as
+    it stands, unsaved -- the Betting tab updates its numbers from this as
+    the user types. Raises SettingsError while a field is invalid.
+    """
+    rules, weights = _parse(conn, user_id, form, check_mode=False)
+    effective = {**AIWeights.for_user(conn, user_id), **(weights or {})}
+    return {"backtest": backtest(conn, rules, effective), **_brier(conn, rules, effective)}
 
 
 def flash(saved: Optional[str]) -> Optional[str]:
-    return {"rules": "Rules saved."}.get(saved or "")
+    return {"rules": "Rules saved.", "weights": "Back to the site's default AI weights."}.get(saved or "")

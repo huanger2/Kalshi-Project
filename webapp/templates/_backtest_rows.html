@@ -1,0 +1,12 @@
+{# The Betting tab's what-if rows: rendered with the page, and again by /betting/preview as the rules form changes. #}
+{% from "_format.html" import money, signed, pct %}
+{% for r in rows %}
+<tr{% if r.current %} class="current-row"{% endif %}>
+    <td>{{ pct(r.min_edge, 0) }}{% if r.current %} <span class="pill neutral">current</span>{% endif %}</td>
+    <td>{{ r.bets }}</td>
+    <td>{{ pct(r.win_rate, 0) }}</td>
+    <td>{{ money(r.staked) }}</td>
+    <td>{{ signed(r.pnl if r.bets else none) }}</td>
+    <td>{{ pct(r.roi) }}</td>
+</tr>
+{% endfor %}

@@ -278,11 +278,11 @@ build the "look at different markets" experience on, not the end state.
 
 Settings come in two kinds:
 
-- **Yours** (the **Settings** tab, any signed-in user): your password, your
-  AI weights, and your Kalshi API keys. Your weights drive the "AI odds"
-  you see on every page and the bets placed for you; until you save your
-  own, you follow the site defaults. Your betting rules are on the
-  **Betting** tab. All of it is saved with your account in
+- **Yours** (any signed-in user): your password and Kalshi API keys on the
+  **Settings** tab, and your betting rules and AI weights on the
+  **Betting** tab. Your weights drive the "AI odds" you see on every page
+  and the bets placed for you; until you save your own, you follow the site
+  defaults. All of it is saved with your account in
   `predictions.db` (see [`Accounts.py`](Accounts.py)), and nobody else sees
   or uses it.
 - **The site's** (**Admin → Shared settings**, admins only): each AI's
@@ -371,6 +371,11 @@ the money. A later run that day only gets what's left under the cap.
 Its cost includes Kalshi's trading fee, 7% of C × P × (1 − P) rounded up to
 the cent. A bet's result and P&L come from its game's outcome, which the
 daily run already settles. A tied NFL game pays $0.50 a contract.
+
+Your AI weights sit with the rules, since they decide which games show an
+edge. As you edit any rule or weight, the **What if?** table and the AI
+odds' Brier score update to match (replayed on the server, nothing saved
+until you click Save).
 
 Besides totals and the bet list, the tab shows:
 

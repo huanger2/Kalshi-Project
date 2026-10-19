@@ -432,25 +432,6 @@ async def change_password(request: Request):
     return response
 
 
-@app.post("/settings/weights", response_class=HTMLResponse)
-async def save_own_weights(request: Request):
-    user = _require_user(request)
-    form = dict(await request.form())
-    with _db() as conn:
-        try:
-            account.save_weights(conn, user["id"], form)
-        except settings.SettingsError as e:
-            return _render_account(request, conn, errors={"weights": e.errors}, status_code=400)
-    return RedirectResponse("/settings?saved=weights#weights", status_code=303)
-
-
-@app.post("/settings/weights/reset")
-def reset_own_weights(request: Request, conn: sqlite3.Connection = Depends(get_db)):
-    user = _require_user(request)
-    account.reset_weights(conn, user["id"])
-    return RedirectResponse("/settings?saved=weights#weights", status_code=303)
-
-
 @app.post("/settings/kalshi/{env}", response_class=HTMLResponse)
 async def save_kalshi_key(
     request: Request,
@@ -649,17 +630,51 @@ def save_betting_rules(
     leagues: list[str] = Form([]),
     segments: list[str] = Form([]),
     confirm_live: str = Form(""),
+    weight_openai: Optional[str] = Form(None, alias="weight::openai"),
+    weight_claude: Optional[str] = Form(None, alias="weight::claude"),
+    weight_gemini: Optional[str] = Form(None, alias="weight::gemini"),
     conn: sqlite3.Connection = Depends(get_db),
 ):
     user = _require_user(request)
-    try:
-        betting.save_config(conn, user["id"], {
-            "mode": mode, "min_edge": min_edge, "stake_usd": stake_usd, "max_daily_usd": max_daily_usd,
+    form = {"mode": mode, "min_edge": min_edge, "stake_usd": stake_usd, "max_daily_usd": max_daily_usd,
             "min_price": min_price, "max_price": max_price, "min_ais": min_ais, "leagues": leagues,
-            "segments": segments, "confirm_live": confirm_live})
+            "segments": segments, "confirm_live": confirm_live}
+    for key, value in (("openai", weight_openai), ("claude", weight_claude), ("gemini", weight_gemini)):
+        if value is not None:
+            form[f"weight::{key}"] = value
+    try:
+        betting.save_config(conn, user["id"], form)
     except settings.SettingsError as e:
         return _render_betting(request, conn, errors=e.errors, status_code=400)
     return RedirectResponse("/betting?saved=rules#rules", status_code=303)
+
+
+@app.post("/betting/weights/reset")
+def reset_own_weights(request: Request, conn: sqlite3.Connection = Depends(get_db)):
+    user = _require_user(request)
+    betting.reset_weights(conn, user["id"])
+    return RedirectResponse("/betting?saved=weights#weights", status_code=303)
+
+
+@app.post("/betting/preview")
+async def preview_betting(request: Request):
+    """
+    The what-if rows (as HTML, rendered like the page's own) and the AI
+    odds' Brier score for the rules form as it stands, unsaved -- the
+    Betting tab's script calls this as the user edits. 422 with the
+    problems while a field is invalid.
+    """
+    user = _require_user(request)
+    raw = await request.form()
+    form = {k: v for k, v in raw.items() if k not in ("leagues", "segments")}
+    form["leagues"], form["segments"] = raw.getlist("leagues"), raw.getlist("segments")
+    with _db() as conn:
+        try:
+            result = betting.preview(conn, user["id"], form)
+        except settings.SettingsError as e:
+            return JSONResponse({"errors": e.errors}, status_code=422)
+    rows = templates.get_template("_backtest_rows.html").render(rows=result["backtest"])
+    return {"rows_html": rows, "brier": result["brier"], "games": result["games"]}
 
 
 # --- Analytics tab: calibration, edge vs returns, and the optimizer (see webapp/analytics.py) ---

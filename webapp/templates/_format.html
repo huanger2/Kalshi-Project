@@ -1,0 +1,11 @@
+{# Number formatting shared by pages and the fragments the Betting tab's preview renders. #}
+{% macro money(x) -%}
+    {%- if x is none -%}&mdash;{%- else -%}{{ "-" if x < 0 }}${{ "%.2f" | format(x | abs) }}{%- endif -%}
+{%- endmacro %}
+{% macro signed(x) -%}
+    {%- if x is none -%}<span class="muted">&mdash;</span>
+    {%- else -%}<span class="{{ 'edge-up' if x > 0 else 'edge-down' if x < 0 }}">{{ "+" if x > 0 }}{{ money(x) }}</span>{%- endif -%}
+{%- endmacro %}
+{% macro pct(x, digits=1) -%}
+    {%- if x is none -%}&mdash;{%- else -%}{{ ("%." ~ digits ~ "f") | format(x * 100) }}%{%- endif -%}
+{%- endmacro %}
