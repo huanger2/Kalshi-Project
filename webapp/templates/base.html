@@ -53,6 +53,7 @@
             {% if request.state.user %}
                 <span class="tab-divider" aria-hidden="true"></span>
                 <a href="/betting" class="{% if active_tab == 'betting' %}active{% endif %}">Betting</a>
+                <a href="/analytics" class="{% if active_tab == 'analytics' %}active{% endif %}">Analytics</a>
                 <a href="/settings" class="{% if active_tab == 'settings' %}active{% endif %}">Settings</a>
                 {% if request.state.role == "admin" %}
                 <a href="/admin/settings" class="{% if active_tab == 'admin' %}active{% endif %}">Admin</a>

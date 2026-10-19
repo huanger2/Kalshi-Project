@@ -1,0 +1,225 @@
+{% extends "base.html" %}
+{% block title %}Analytics - AI vs Kalshi{% endblock %}
+
+{% macro money(x) -%}
+    {%- if x is none -%}&mdash;{%- else -%}{{ "-" if x < 0 }}${{ "%.2f" | format(x | abs) }}{%- endif -%}
+{%- endmacro %}
+{% macro signed(x) -%}
+    {%- if x is none -%}<span class="muted">&mdash;</span>
+    {%- else -%}<span class="{{ 'edge-up' if x > 0 else 'edge-down' if x < 0 }}">{{ "+" if x > 0 }}{{ money(x) }}</span>{%- endif -%}
+{%- endmacro %}
+{% macro pct(x, digits=1) -%}
+    {%- if x is none -%}&mdash;{%- else -%}{{ ("%." ~ digits ~ "f") | format(x * 100) }}%{%- endif -%}
+{%- endmacro %}
+{% macro brier(x) -%}{%- if x is none -%}&mdash;{%- else -%}{{ "%.4f" | format(x) }}{%- endif -%}{%- endmacro %}
+{% macro interval(i) -%}
+    {%- if not i -%}<span class="muted">&mdash;</span>{%- else -%}{{ pct(i[0], 0) }} to {{ pct(i[1], 0) }}{%- endif -%}
+{%- endmacro %}
+{% macro verdict(v) -%}
+    <p class="verdict"><span class="pill {{ {'better': 'won', 'worse': 'lost'}.get(v[0], 'neutral') }}">
+        {{ {"better": "Looks better", "worse": "Don't apply", "same": "No change", "unclear": "Not proven", "none": "Nothing found"}[v[0]] }}</span>
+        {{ v[1] }}</p>
+{%- endmacro %}
+{% macro ai_name(key) -%}{{ "OpenAI" if key == "openai" else key | capitalize }}{%- endmacro %}
+
+{% block content %}
+{% set run = a.run %}
+
+<section class="panel">
+    <h1>Analytics</h1>
+    <p class="subtitle">How your AI odds (with your AI weights) have held up on the {{ a.games }} settled game{{ "" if a.games == 1 else "s" }}
+        {% if a.first_day %}from {{ a.first_day }} to {{ a.last_day }}, over {{ a.days }} game day{{ "" if a.days == 1 else "s" }}{% endif %},
+        and an optimizer that suggests AI weights and betting rules fitted to them.</p>
+    {% if message %}<p class="form-message" role="status">{{ message }}</p>{% endif %}
+    {% for e in errors %}{% if loop.first %}<div class="form-error" role="alert"><ul>{% endif %}
+        <li>{{ e }}</li>{% if loop.last %}</ul></div>{% endif %}{% endfor %}
+    {% if a.games < 300 %}
+    <p class="note small-sample"><strong>Small sample.</strong> With {{ a.games }} games, results swing a lot on luck: a
+        rule that looks great here can easily be noise. The optimizer guards against that (it prefers suggestions that hold
+        up on games they weren't fitted to), but treat everything on this page as a hint, and check the
+        <em>unseen days</em> results before applying anything.</p>
+    {% endif %}
+</section>
+
+<section class="panel" id="optimizer">
+    <div class="panel-head">
+        <div>
+            <h2>Optimizer</h2>
+            <p class="subtitle">Fits your AI weights to the settled games, then searches for the betting rules (minimum
+                edge, price range, AIs required) that would have done best with them. Your stake, daily cap, leagues and
+                seasons stay as they are: those are about how much to risk, not where the edge is.</p>
+        </div>
+        <form method="post" action="/analytics/run">
+            <button type="submit" class="button inline primary" {% if not a.can_run %}disabled{% endif %}>
+                {{ "Run again" if run else "Run optimizer" }}</button>
+        </form>
+    </div>
+    {% if not a.can_run %}
+        <p class="empty">Needs at least {{ a.min_games }} settled games over {{ a.min_days }} game days; there are
+            {{ a.games }} over {{ a.days }} so far.</p>
+    {% elif not run %}
+        <p class="empty">Not run yet. It takes a few seconds.</p>
+    {% else %}
+    {% set w = run.weights %}
+    {% set r = run.rules %}
+    <p class="note">Last run {{ run.ran_at | replace("T", " ") }}, on {{ run.games }} games.
+        {% if a.stale %}<strong>New games have settled since</strong> -- run it again to include them.{% endif %}</p>
+
+    <div class="panel-row optimizer-cards">
+        <div class="opt-card" id="opt-weights">
+            <h3>AI weights</h3>
+            <div class="table-scroll">
+            <table>
+                <thead><tr><th>AI</th><th>Yours now</th><th>Suggested</th><th>Brier alone</th></tr></thead>
+                <tbody>
+                    {% for llm in w.llms %}
+                    <tr><td>{{ ai_name(llm) }}</td><td>{{ "%.2f" | format(w.current[llm]) }}</td>
+                        <td><strong>{{ "%.2f" | format(w.suggested[llm]) }}</strong></td><td>{{ brier(w.single[llm]) }}</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            </div>
+            <h4 class="table-heading">Brier score of the AI odds (lower is better; 0.25 is a coin flip)</h4>
+            <div class="table-scroll">
+            <table>
+                <thead><tr><th></th><th>Fitted games</th><th>Unseen days</th></tr></thead>
+                <tbody>
+                    <tr><td>Your weights</td><td>{{ brier(w.brier.current) }}</td><td>{{ brier(w.cv_brier.current) }}</td></tr>
+                    <tr><td>Suggested</td><td>{{ brier(w.brier.suggested) }}</td><td>{{ brier(w.cv_brier.suggested) }}</td></tr>
+                    <tr><td>Equal weights</td><td>{{ brier(w.brier.equal) }}</td><td>{{ brier(w.cv_brier.equal) }}</td></tr>
+                    <tr class="muted"><td>Kalshi's price</td><td>{{ brier(w.brier.market) }}</td><td></td></tr>
+                </tbody>
+            </table>
+            </div>
+            <p class="note">"Unseen days": each game day predicted by weights fitted without it. The pull toward equal
+                weights (strength {{ w["lambda"] }}) was picked the same way.</p>
+            {{ verdict(a.verdicts.weights) }}
+            <form method="post" action="/analytics/apply">
+                <input type="hidden" name="which" value="weights">
+                <button type="submit" class="button inline" {% if w.suggested == w.current %}disabled{% endif %}>Apply suggested weights</button>
+            </form>
+        </div>
+
+        <div class="opt-card" id="opt-rules">
+            <h3>Betting rules</h3>
+            {% set cur = r.current_rules %}
+            {% set sug = r.suggested.rules if r.suggested else none %}
+            <div class="table-scroll">
+            <table>
+                <thead><tr><th>Rule</th><th>Yours now</th><th>Suggested</th></tr></thead>
+                <tbody>
+                    <tr><td>Minimum edge</td><td>{{ "%g" | format(cur.min_edge * 100) }} pts</td>
+                        <td><strong>{{ ("%g" | format(sug.min_edge * 100)) ~ " pts" if sug else "--" }}</strong></td></tr>
+                    <tr><td>Price range</td><td>{{ "%g" | format(cur.min_price * 100) }}&ndash;{{ "%g" | format(cur.max_price * 100) }}&cent;</td>
+                        <td><strong>{% if sug %}{{ "%g" | format(sug.min_price * 100) }}&ndash;{{ "%g" | format(sug.max_price * 100) }}&cent;{% else %}--{% endif %}</strong></td></tr>
+                    <tr><td>AIs that must answer</td><td>{{ cur.min_ais }}</td><td><strong>{{ sug.min_ais if sug else "--" }}</strong></td></tr>
+                </tbody>
+            </table>
+            </div>
+            <h4 class="table-heading">Replayed on all {{ run.games }} games (fitted, so flattering)</h4>
+            <div class="table-scroll">
+            <table>
+                <thead><tr><th></th><th>Bets</th><th>P&amp;L</th><th>ROI</th><th>ROI, 90% range</th></tr></thead>
+                <tbody>
+                    <tr><td>Your rules</td><td>{{ r.current.bets }}</td><td>{{ signed(r.current.pnl if r.current.bets else none) }}</td>
+                        <td>{{ pct(r.current.roi) }}</td><td>{{ interval(r.current.interval) }}</td></tr>
+                    {% if r.suggested %}
+                    <tr><td>Suggested</td><td>{{ r.suggested.bets }}</td><td>{{ signed(r.suggested.pnl) }}</td>
+                        <td>{{ pct(r.suggested.roi) }}</td><td>{{ interval(r.suggested.interval) }}</td></tr>
+                    {% endif %}
+                </tbody>
+            </table>
+            </div>
+            {% set wf = r.walk_forward %}
+            <h4 class="table-heading">On {{ wf.days | length }} unseen day{{ "" if wf.days | length == 1 else "s" }} (the honest check)</h4>
+            <div class="table-scroll">
+            <table>
+                <thead><tr><th></th><th>Bets</th><th>P&amp;L</th><th>ROI</th></tr></thead>
+                <tbody>
+                    <tr><td>Your rules</td><td>{{ wf.current.bets }}</td><td>{{ signed(wf.current.pnl if wf.current.bets else none) }}</td><td>{{ pct(wf.current.roi) }}</td></tr>
+                    <tr><td>Tuned each day</td><td>{{ wf.tuned.bets }}</td><td>{{ signed(wf.tuned.pnl if wf.tuned.bets else none) }}</td><td>{{ pct(wf.tuned.roi) }}</td></tr>
+                </tbody>
+            </table>
+            </div>
+            <p class="note">"Tuned each day": rules re-picked before every game day using only the days before it, then
+                bet on that day. The 90% range shows how much ROI could move on luck alone; one that spans zero means the
+                result can't be told apart from chance yet. Rules are ranked by return minus one standard error, and
+                need at least {{ r.min_bets }} bets to count. Tuned with the suggested AI weights; stake
+                ${{ "%g" | format(cur.stake_usd) }} and daily cap ${{ "%g" | format(cur.max_daily_usd) }} kept.</p>
+            {{ verdict(a.verdicts.rules) }}
+            <form method="post" action="/analytics/apply">
+                <input type="hidden" name="which" value="rules">
+                <button type="submit" class="button inline" {% if not r.suggested or a.verdicts.rules[0] == "same" %}disabled{% endif %}>Apply suggested rules</button>
+            </form>
+        </div>
+    </div>
+    {% if r.suggested and w.suggested != w.current and a.verdicts.rules[0] != "same" %}
+    <form method="post" action="/analytics/apply" class="apply-both">
+        <input type="hidden" name="which" value="both">
+        <button type="submit" class="button inline primary">Apply both</button>
+        <span class="note">The suggested rules were found with the suggested weights, so they belong together.</span>
+    </form>
+    {% endif %}
+    {% endif %}
+</section>
+
+<div class="panel-row">
+<section class="panel" id="calibration">
+    <h2>Calibration</h2>
+    <p class="subtitle">Games grouped by the chance given to the listed team, against how often it actually won.
+        Well calibrated means "predicted" and "won" are close in each row.</p>
+    {% if not a.games %}<p class="empty">No settled games yet.</p>{% else %}
+    <div class="table-scroll">
+    <table>
+        <thead>
+            <tr><th rowspan="2">Chance</th><th colspan="3" class="group">AI odds</th><th colspan="3" class="group">Kalshi</th></tr>
+            <tr><th>Games</th><th>Predicted</th><th>Won</th><th>Games</th><th>Predicted</th><th>Won</th></tr>
+        </thead>
+        <tbody>
+            {% for row in a.calibration if row.ai or row.market %}
+            <tr>
+                <td>{{ "%d" | format(row.low * 100) }}&ndash;{{ "%d" | format(row.high * 100) }}%</td>
+                {% for src in (row.ai, row.market) %}
+                    {% if src %}<td>{{ src.games }}</td><td>{{ pct(src.predicted, 0) }}</td><td>{{ pct(src.actual, 0) }}</td>
+                    {% else %}<td class="muted">0</td><td></td><td></td>{% endif %}
+                {% endfor %}
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% endif %}
+</section>
+
+<section class="panel" id="sources">
+    <h2>Who predicts best</h2>
+    <p class="subtitle">Brier score on the same settled games: the average squared miss, lower is better, 0.25 is a
+        coin flip.</p>
+    <div class="table-scroll">
+    <table>
+        <thead><tr><th>Source</th><th>Brier</th></tr></thead>
+        <tbody>
+            {% for s in a.sources %}<tr><td>{{ s.label }}</td><td>{{ brier(s.brier) }}</td></tr>{% endfor %}
+        </tbody>
+    </table>
+    </div>
+
+    <h2 class="section-gap">Does a bigger edge pay?</h2>
+    <p class="subtitle">Every settled game's better side, one contract at its ask plus Kalshi's fee, grouped by the edge
+        your AI odds saw -- no other rules applied. If edge means anything, ROI should rise down the table.</p>
+    {% if not a.edges %}<p class="empty">No settled games yet.</p>{% else %}
+    <div class="table-scroll">
+    <table>
+        <thead><tr><th>Edge</th><th>Games</th><th>Win rate</th><th>P&amp;L</th><th>ROI</th></tr></thead>
+        <tbody>
+            {% for e in a.edges %}
+            <tr><td>{{ e.label }}</td><td>{{ e.bets }}</td><td>{{ pct(e.win_rate, 0) }}</td><td>{{ signed(e.pnl) }}</td><td>{{ pct(e.roi) }}</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% endif %}
+</section>
+</div>
+
+{% endblock %}

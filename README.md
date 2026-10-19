@@ -388,6 +388,35 @@ Besides totals and the bet list, the tab shows:
 Your rules are saved with your account. `betting.json` is only read once,
 to give the first admin the rules the site had before accounts existed.
 
+### Analytics tab
+
+Signed in, the **Analytics** tab checks how your AI odds (with your AI
+weights) have held up, and can suggest better weights and betting rules
+(see [`Optimizer.py`](Optimizer.py)):
+
+- **Calibration**: games grouped by the chance given to the listed team,
+  against how often it won, for the AI odds and for Kalshi's price.
+- **Who predicts best**: the Brier score of each AI alone, your weighted AI
+  odds, and Kalshi's price.
+- **Does a bigger edge pay?**: every settled game's better side, one
+  contract at its ask with fees, grouped by edge. If the AI odds carry real
+  information, ROI rises with the edge.
+- **Optimizer** (button): fits your **AI weights** to minimize the AI odds'
+  Brier score, pulled toward equal weights by an amount picked with
+  leave-one-day-out cross-validation; then grid-searches the **betting
+  rules** that choose bets (minimum edge, price range, AIs required),
+  replayed over the settled games with the suggested weights. Your stake,
+  daily cap, leagues and seasons are kept. Rules are ranked by their return
+  minus one standard error, so a few lucky bets can't win.
+
+With a few dozen games, an in-sample replay mostly measures luck, so every
+suggestion comes with an honest check: weights are scored on held-out days,
+and rules on a **walk-forward** test that re-picks rules before each game
+day using only earlier days, then bets that day. A 90% bootstrap range shows
+how far ROI could swing on luck alone. Each suggestion gets a plain verdict,
+and **Apply** buttons save it through the same checks as the Settings and
+Betting forms (applying rules never changes your betting mode).
+
 ### Accounts and signing in
 
 The first page a visitor sees is a sign-in screen: sign in, or **Continue
@@ -615,6 +644,7 @@ day's run catches it up.
 | `ClaudeAi.py`, `OpenAi.py`, `Gemini.py` | One wrapper per AI API |
 | `AISettings.py`, `ai_settings.json` | Which model each AI uses |
 | `Accounts.py` | Users, their own settings (betting rules, AI weights) and encrypted Kalshi keys; the first admin |
+| `Optimizer.py` | The Analytics tab's optimizer and diagnostics: weight fitting, rule search, walk-forward checks |
 | `AIWeights.py`, `ai_weights.json` | Each AI's weight for the AI-odds consensus: site defaults, and each user's own |
 | `Betting.py`, `betting.json` | Per-user betting: which games get a bet, its size and Kalshi fee, placing it, and its result (`betting.json` only seeds the first admin) |
 | `Probability.py` | Builds the prompt, parses AI replies, runs the EV analysis |

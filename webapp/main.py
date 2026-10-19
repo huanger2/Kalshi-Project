@@ -32,7 +32,7 @@ import CostTracker
 import Leagues
 import Tracker
 from DailyLog import DEFAULT_LLM_NAMES
-from webapp import account, auth, betting, daily_run, data_files, queries, settings, suggestions, users
+from webapp import account, analytics, auth, betting, daily_run, data_files, queries, settings, suggestions, users
 
 HERE = Path(__file__).parent
 
@@ -660,6 +660,45 @@ def save_betting_rules(
     except settings.SettingsError as e:
         return _render_betting(request, conn, errors=e.errors, status_code=400)
     return RedirectResponse("/betting?saved=rules#rules", status_code=303)
+
+
+# --- Analytics tab: calibration, edge vs returns, and the optimizer (see webapp/analytics.py) ---
+
+def _render_analytics(request: Request, conn: sqlite3.Connection, message: Optional[str] = None,
+                      errors: Optional[list] = None, status_code: int = 200):
+    return templates.TemplateResponse(
+        request, "analytics.html",
+        {"a": analytics.view(conn, request.state.user), "message": message, "errors": errors or [],
+         "ai_names": DEFAULT_LLM_NAMES, "active_tab": "analytics"},
+        status_code=status_code,
+    )
+
+
+@app.get("/analytics", response_class=HTMLResponse)
+def analytics_page(request: Request, applied: Optional[str] = None, ran: Optional[str] = None,
+                   conn: sqlite3.Connection = Depends(get_db)):
+    _require_user(request)
+    return _render_analytics(request, conn, message=analytics.flash(applied and applied[:100], ran))
+
+
+@app.post("/analytics/run", response_class=HTMLResponse)
+def run_optimizer(request: Request, conn: sqlite3.Connection = Depends(get_db)):
+    user = _require_user(request)
+    try:
+        analytics.run(conn, user)
+    except settings.SettingsError as e:
+        return _render_analytics(request, conn, errors=e.errors, status_code=400)
+    return RedirectResponse("/analytics?ran=1#optimizer", status_code=303)
+
+
+@app.post("/analytics/apply", response_class=HTMLResponse)
+def apply_optimized(request: Request, which: str = Form(""), conn: sqlite3.Connection = Depends(get_db)):
+    user = _require_user(request)
+    try:
+        applied = analytics.apply(conn, user, which)
+    except settings.SettingsError as e:
+        return _render_analytics(request, conn, errors=e.errors, status_code=400)
+    return RedirectResponse(f"/analytics?applied={quote(' and '.join(applied))}#optimizer", status_code=303)
 
 
 # --- Admin: data -- move history in, get generated spreadsheets out ---
