@@ -36,7 +36,7 @@ from webapp import account, analytics, auth, betting, daily_run, data_files, que
 
 HERE = Path(__file__).parent
 
-app = FastAPI(title="AI vs Kalshi")
+app = FastAPI(title="Fantasia")
 app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
 templates = Jinja2Templates(directory=str(HERE / "templates"))
 
@@ -62,7 +62,7 @@ async def database_unavailable(request: Request, exc: sqlite3.OperationalError):
     if request.url.path.startswith("/api/"):
         return JSONResponse({"detail": message}, status_code=503)
     return HTMLResponse(
-        "<!doctype html><meta charset='utf-8'><title>Database unavailable - AI vs Kalshi</title>"
+        "<!doctype html><meta charset='utf-8'><title>Database unavailable - Fantasia</title>"
         "<body style='font-family: system-ui, sans-serif; max-width: 40rem; margin: 3rem auto; padding: 0 1rem'>"
         f"<h1>Database unavailable</h1><p>{html.escape(message)}</p></body>",
         status_code=503,

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Analytics - AI vs Kalshi{% endblock %}
+{% block title %}Analytics - Fantasia{% endblock %}
 
 {% macro money(x) -%}
     {%- if x is none -%}&mdash;{%- else -%}{{ "-" if x < 0 }}${{ "%.2f" | format(x | abs) }}{%- endif -%}
