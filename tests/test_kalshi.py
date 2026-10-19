@@ -148,6 +148,33 @@ class PrivateKeyParsingTests(unittest.TestCase):
             Kalshi.parse_private_key("not a key")
 
 
+class Ed25519KeyTests(unittest.TestCase):
+    """Kalshi also issues Ed25519 keys, which sign the message as is (no RSA-PSS padding)."""
+
+    @classmethod
+    def setUpClass(cls):
+        from cryptography.hazmat.primitives.asymmetric import ed25519
+        cls.key = ed25519.Ed25519PrivateKey.generate()
+
+    def raw(self, key):
+        from cryptography.hazmat.primitives import serialization
+        return key.private_bytes(serialization.Encoding.Raw, serialization.PrivateFormat.Raw,
+                                 serialization.NoEncryption())
+
+    def test_parsed_however_it_was_pasted(self):
+        pem = _pem(self.key)
+        body = "".join(pem.strip().splitlines()[1:-1])
+        for text in (pem, pem.replace("\n", " "), body):
+            with self.subTest(text=text[:30]):
+                self.assertEqual(self.raw(Kalshi.parse_private_key(text)), self.raw(self.key))
+
+    def test_signs_timestamp_method_and_path(self):
+        headers = Kalshi.sign_request(self.key, "GET", "/trade-api/v2/portfolio/balance?x=1", key_id="id")
+        msg = (headers["KALSHI-ACCESS-TIMESTAMP"] + "GET" + "/trade-api/v2/portfolio/balance").encode()
+        self.key.public_key().verify(base64.b64decode(headers["KALSHI-ACCESS-SIGNATURE"]), msg)  # raises if bad
+        self.assertEqual(headers["KALSHI-ACCESS-KEY"], "id")
+
+
 class AuthHeaderTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

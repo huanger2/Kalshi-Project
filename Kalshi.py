@@ -50,7 +50,7 @@ def load_private_key(file_path):
 
 def parse_private_key(text: str):
     """
-    An RSA private key from its PEM text, however an env var mangled it:
+    A private key (Ed25519 or RSA) from its PEM text, however an env var mangled it:
     surrounding quotes, literal "\\n"s, or the newlines flattened to spaces
     (pasting a key into a one-line .env value or Railway's variable editor).
     A bare base64 body with no BEGIN/END lines is read as PKCS#8, then PKCS#1.
@@ -71,19 +71,26 @@ def parse_private_key(text: str):
 
 
 def sign_request(private_key, method, path, key_id=None):
-    """Kalshi auth headers: an RSA-PSS signature over timestamp + method + path (no query)."""
+    """
+    Kalshi auth headers: a signature over timestamp + method + path (no
+    query). Kalshi issues both key types: an Ed25519 key signs the message
+    as is, an RSA key with RSA-PSS (SHA-256, salt the digest's length).
+    """
     from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.primitives.asymmetric import padding
+    from cryptography.hazmat.primitives.asymmetric import ed25519, padding
 
     timestamp_ms = str(int(datetime.datetime.now().timestamp() * 1000))
     path_no_query = path.split("?")[0]
     msg = (timestamp_ms + method + path_no_query).encode("utf-8")
 
-    signature = private_key.sign(
-        msg,
-        padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.DIGEST_LENGTH),
-        hashes.SHA256(),
-    )
+    if isinstance(private_key, ed25519.Ed25519PrivateKey):
+        signature = private_key.sign(msg)
+    else:
+        signature = private_key.sign(
+            msg,
+            padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.DIGEST_LENGTH),
+            hashes.SHA256(),
+        )
     return {
         "KALSHI-ACCESS-KEY": key_id,
         "KALSHI-ACCESS-SIGNATURE": base64.b64encode(signature).decode("utf-8"),

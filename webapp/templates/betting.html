@@ -40,10 +40,10 @@
     </p>
     {% if a %}
     {% if not a.credentials %}
-        <p class="form-error" role="alert">No Kalshi {{ mode_names[a.mode] | lower }} keys are set, so orders will fail.
+        <p class="form-error" role="alert">No {{ 'Kalshi demo' if a.mode == 'demo' else 'live Kalshi' }} keys are set, so orders will fail.
             See the README's Betting section.</p>
     {% elif a.error %}
-        <p class="form-error" role="alert">Couldn't reach the Kalshi {{ mode_names[a.mode] | lower }} account: {{ a.error }}</p>
+        <p class="form-error" role="alert">Couldn't reach the {{ 'Kalshi demo' if a.mode == 'demo' else 'live Kalshi' }} account: {{ a.error }}</p>
     {% endif %}
     {% endif %}
     {% if b.tabs | length > 1 %}
