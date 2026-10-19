@@ -63,7 +63,13 @@
         timer = setTimeout(refresh, 350);
     }
 
-    form.addEventListener("input", schedule);
-    form.addEventListener("change", schedule);
+    // On the document, not the form: the AI weight inputs live in their own
+    // panel, joined to the form by form="rules-form", so their events don't
+    // bubble through it.
+    function fromForm(event) {
+        if (event.target && event.target.form === form) schedule();
+    }
+    document.addEventListener("input", fromForm);
+    document.addEventListener("change", fromForm);
     form.addEventListener("submit", function () { saved = serialize(); });
 })();

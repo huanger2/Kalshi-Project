@@ -98,13 +98,15 @@
     </div>
 </section>
 
-<div class="panel-row">
+<div class="panel-columns">
+<div class="panel-stack">
 <section class="panel" id="rules">
     <h2>Rules</h2>
     <p class="subtitle">Edge is the AI odds for a side minus what one contract on that side costs (its ask), in
         points. Each game's better side is bet if its edge clears the minimum; when more games qualify than
         the daily cap covers, the biggest edges get the money. Changes apply from the next daily run; the
-        <a href="#backtest">What if?</a> numbers follow your edits as you type, before you save.</p>
+        <a href="#backtest">What if?</a> numbers follow your edits (and your <a href="#weights">AI weights</a>) as you
+        type, before you save.</p>
     {% if message %}<p class="form-message" role="status">{{ message }}</p>{% endif %}
     {% for e in errors %}{% if loop.first %}<div class="form-error" role="alert">Nothing was saved:<ul>{% endif %}
         <li>{{ e }}</li>{% if loop.last %}</ul></div>{% endif %}{% endfor %}
@@ -154,33 +156,15 @@
             </div>
         </div>
 
-        <h3 class="form-subhead" id="weights">AI weights</h3>
-        <p class="note">How much each AI counts in your AI odds -- here, in the bets placed for you, and on every page
-            you view. 1.0 each is equal weighting; 0 leaves an AI out.
-            {% if b.custom_weights %}Using your own weights.
-                <button type="submit" form="reset-weights" class="link-button">Go back to the site defaults</button>
-            {% else %}Following the site defaults; saving different ones makes them yours.{% endif %}</p>
-        <div class="settings-grid">
-            {% for p in b.providers %}
-                <label for="weight-{{ p.key }}">{{ p.name }}</label>
-                <div>
-                    <input id="weight-{{ p.key }}" name="weight::{{ p.key }}" type="number" step="0.05" min="0" max="10"
-                           value="{{ '%g' | format(p.weight) }}" required>
-                    {% if p.weight != p.default %}<span class="muted default-hint">site default {{ '%g' | format(p.default) }}</span>{% endif %}
-                </div>
-            {% endfor %}
-            <span class="settings-label">AI odds' Brier score</span>
-            <div><strong id="weights-brier">{% if b.weights_brier.brier is none %}&mdash;{% else %}{{ "%.4f" | format(b.weights_brier.brier) }}{% endif %}</strong>
-                <span class="muted default-hint">lower is better, 0.25 is a coin flip; on the
-                    <span id="weights-brier-games">{{ b.weights_brier.games }}</span> settled games in these leagues and parts of the season</span></div>
-        </div>
         <div class="form-actions">
             <button type="submit" class="button inline primary">Save rules and weights</button>
             <span class="preview-status" id="preview-status" role="status" aria-live="polite"></span>
         </div>
     </form>
 </section>
+</div>
 
+<div class="panel-stack">
 <section class="panel" id="backtest">
     <div class="panel-head"><h2>What if?</h2><span class="pill pending" id="preview-badge" hidden>Unsaved changes</span></div>
     <p class="subtitle">These rules replayed over all {{ b.settled_games }} settled game{{ "" if b.settled_games == 1 else "s" }}
@@ -200,6 +184,33 @@
         not a result.</p>
     {% endif %}
 </section>
+
+{# Part of the rules form (form="rules-form"): saved with the rules, and previewed live like them. #}
+<section class="panel" id="weights">
+    <h2>AI weights</h2>
+    <p class="subtitle">How much each AI counts in your AI odds -- in your bets, in What if? above, and on every page.
+        1.0 each is equal; 0 leaves an AI out.
+        {% if b.custom_weights %}Using your own.
+            <button type="submit" form="reset-weights" class="link-button">Back to the site defaults</button>
+        {% else %}Following the site defaults.{% endif %}</p>
+    <div class="weight-row">
+        {% for p in b.providers %}
+        <div class="weight-field">
+            <label for="weight-{{ p.key }}">{{ p.name }}</label>
+            <input id="weight-{{ p.key }}" name="weight::{{ p.key }}" form="rules-form" type="number" step="0.05"
+                   min="0" max="10" value="{{ '%g' | format(p.weight) }}" required>
+            {% if p.weight != p.default %}<span class="muted default-hint">site default {{ '%g' | format(p.default) }}</span>{% endif %}
+        </div>
+        {% endfor %}
+        <div class="weight-field weight-score">
+            <span class="settings-label">AI odds' Brier score</span>
+            <strong id="weights-brier">{% if b.weights_brier.brier is none %}&mdash;{% else %}{{ "%.4f" | format(b.weights_brier.brier) }}{% endif %}</strong>
+        </div>
+    </div>
+    <p class="note">Brier: lower is better, 0.25 is a coin flip; on the <span id="weights-brier-games">{{ b.weights_brier.games }}</span>
+        settled games in your leagues and parts of the season. Saved with your rules.</p>
+</section>
+</div>
 </div>
 
 {% if s.bets %}

@@ -16,7 +16,7 @@
         {% if u.is_admin %}on the <a href="/admin/settings">Admin tab</a>{% else %}set by an admin{% endif %}.</p>
 </section>
 
-<div class="panel-row">
+<div class="panel-row narrow-first account-row equal-height">
 <section class="panel" id="account">
     <h2>Account</h2>
     {% if u.must_change_password %}
@@ -41,9 +41,6 @@
         <button type="submit" class="button inline primary">Change password</button>
     </form>
 </section>
-
-
-</div>
 
 <section class="panel" id="kalshi">
     <h2>Kalshi API keys</h2>
@@ -96,5 +93,6 @@
         {% endfor %}
     </div>
 </section>
+</div>
 
 {% endblock %}

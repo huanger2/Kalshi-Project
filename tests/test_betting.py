@@ -556,7 +556,7 @@ class BettingPageTests(BettingConfigTestCase):
             conn.close()
         page = self.client.get("/betting").text
         self.assertIn('name="weight::openai"', page)
-        self.assertIn("Go back to the site defaults", page)
+        self.assertIn("Back to the site defaults", page)
         self.client.post("/betting/weights/reset")
         conn = Tracker.connect(self.db_path)
         try:

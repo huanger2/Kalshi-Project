@@ -298,7 +298,9 @@ body {
     resize: vertical;
 }
 .settings-form textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.key-cards { --col-min: 24rem; margin: 0.75rem 0 0; }
+.panel-row.key-cards { --col-min: 21rem; margin: 0.75rem 0 0; }
+.key-card .settings-grid { grid-template-columns: max-content minmax(0, 1fr); }
+.account-row #account .settings-grid { grid-template-columns: max-content minmax(0, 1fr); }
 .key-card { border: 1px solid var(--border); border-radius: 8px; padding: 0.9rem 1rem 1rem; min-width: 0; }
 .key-card h3 { margin: 0 0 0.6rem; font-size: 1rem; }
 .key-card .facts { margin-bottom: 0.75rem; }
@@ -406,6 +408,36 @@ main {
     margin-bottom: 1.5rem;
 }
 .panel-row > .panel { margin-bottom: 0; }
+/* Two columns of stacked panels, so a tall panel on one side is balanced by
+   several on the other instead of leaving a gap; one column when narrow. */
+.panel-columns {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 26rem), 1fr));
+    gap: 0 1.5rem;
+    align-items: start;
+}
+.panel-stack { min-width: 0; display: flex; flex-direction: column; }
+/* Side by side, both columns end on the same line: each column's last panel
+   grows to fill, so spare height is inside a panel, not a hole in the page. */
+@media (min-width: 900px) {
+    .panel-columns { align-items: stretch; }
+    .panel-stack > .panel:last-child { flex: 1 1 auto; }
+}
+.panel-row.equal-height { align-items: stretch; }
+/* The rules form fills its (stretched) panel, with its Save button at the bottom. */
+#rules { display: flex; flex-direction: column; }
+#rules > form { flex: 1 1 auto; display: flex; flex-direction: column; }
+#rules > form > .form-actions { margin-top: auto; padding-top: 1rem; }
+.weight-row { display: flex; flex-wrap: wrap; gap: 0.75rem 1.25rem; align-items: flex-start; margin: 0.25rem 0 0.25rem; }
+.weight-field { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.88rem; }
+.weight-field label { font-weight: 600; }
+.weight-field input {
+    width: 6.5rem; padding: 0.4rem 0.55rem; border: 1px solid var(--border); border-radius: 6px;
+    font: inherit; font-size: 0.88rem; background: var(--panel); color: var(--text);
+}
+.weight-field input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.weight-score strong { font-size: 1.15rem; line-height: 2rem; }
+.weight-field .default-hint { margin-top: 0; }
 /* Two panels where one deserves more room: 2:1 on wide screens, stacked below. */
 @media (min-width: 1100px) {
     .panel-row.wide-first { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
