@@ -7,9 +7,16 @@ paid, and an optimizer (Optimizer.py) that suggests AI weights and betting
 rules fitted to the settled games so far -- with honest checks next to the
 suggestion, and buttons to apply it.
 
-A run's results are kept as the user's "analytics_run" setting, so they
-survive the redirect after running or applying, and the page can say when
-newer settled games have made a run stale.
+Everything on the tab -- diagnostics and the optimizer -- covers the parts
+of the season picked in its filter (preseason, regular season,
+postseason), by default the ones the user's betting rules bet on:
+preseason results are noisy, since teams rest players and don't play to
+win, so tuning on them can mislead.
+
+A run's results are kept as the user's "analytics_run" setting (with the
+season parts it used), so they survive the redirect after running or
+applying, and the page can say when newer settled games, or a different
+filter, have made a run stale.
 """
 
 import datetime
@@ -57,15 +64,29 @@ def _verdicts(run: dict) -> dict:
     return {"weights": weights, "rules": rules}
 
 
-def view(conn: sqlite3.Connection, user: dict) -> dict:
-    """Everything the Analytics page shows `user`."""
+def segments_for(conn: sqlite3.Connection, user: dict, picked: Optional[list[str]]) -> list[str]:
+    """The season parts to analyze: those picked (in the usual order), else the ones the user bets on."""
+    if picked:
+        return [s for s in Betting.SEGMENTS if s in picked]
+    return list(Betting.load_config(conn, user["id"])["segments"]) or list(Betting.SEGMENTS)
+
+
+def view(conn: sqlite3.Connection, user: dict, segments: Optional[list[str]] = None) -> dict:
+    """Everything the Analytics page shows `user`, for the `segments` parts of the season (see segments_for())."""
     uid = user["id"]
+    segments = segments_for(conn, user, segments)
     weights = AIWeights.for_user(conn, uid)
-    games = Optimizer.load_games(conn)
+    games = Optimizer.load_games(conn, segments)
     days = Optimizer.days_of(games)
     run = Accounts.get_setting(conn, uid, RUN_SETTING)
+    run_segments = (run or {}).get("segments") or list(Betting.SEGMENTS)
     can_run = len(games) >= Optimizer.MIN_GAMES and len(days) >= Optimizer.MIN_DAYS
+    counts = Optimizer.segment_counts(conn)
     return {
+        "segments": segments,
+        "segment_options": [{"key": s, "games": counts.get(s, 0), "checked": s in segments} for s in Betting.SEGMENTS],
+        "run_segments": run_segments,
+        "other_filter": bool(run) and run_segments != segments,
         "games": len(games),
         "days": len(days),
         "first_day": days[0] if days else None,
@@ -78,22 +99,28 @@ def view(conn: sqlite3.Connection, user: dict) -> dict:
         "calibration": Optimizer.calibration(games, weights),
         "edges": Optimizer.edge_returns(games, weights),
         "run": run,
-        "stale": bool(run) and run.get("games") != len(games),
+        "stale": bool(run) and run_segments == segments and run.get("games") != len(games),
         "verdicts": _verdicts(run) if run else None,
     }
 
 
-def run(conn: sqlite3.Connection, user: dict) -> dict:
-    """Optimize the user's weights, then their rules (using the suggested weights); keep and return the result."""
+def run(conn: sqlite3.Connection, user: dict, segments: Optional[list[str]] = None) -> dict:
+    """
+    Optimize the user's weights, then their rules (using the suggested
+    weights), on the `segments` parts of the season; keep and return the result.
+    """
     uid = user["id"]
-    games = Optimizer.load_games(conn)
+    segments = segments_for(conn, user, segments)
+    games = Optimizer.load_games(conn, segments)
     if len(games) < Optimizer.MIN_GAMES or len(Optimizer.days_of(games)) < Optimizer.MIN_DAYS:
         raise SettingsError([f"Optimizing needs at least {Optimizer.MIN_GAMES} settled games over "
-                             f"{Optimizer.MIN_DAYS} game days."])
+                             f"{Optimizer.MIN_DAYS} game days in the parts of the season picked; there are "
+                             f"{len(games)} over {len(Optimizer.days_of(games))}."])
     rules = Betting.load_config(conn, uid)
     weights = Optimizer.optimize_weights(games, AIWeights.for_user(conn, uid))
     result = {
         "ran_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        "segments": segments,
         "games": len(games),
         "days": len(Optimizer.days_of(games)),
         "weights": weights,
@@ -140,6 +167,12 @@ def apply(conn: sqlite3.Connection, user: dict, which: str) -> list[str]:
     if not applied:
         raise SettingsError([f"Nothing to apply for {which!r}."])
     return applied
+
+
+def run_segments(conn: sqlite3.Connection, user: dict) -> list[str]:
+    """The season parts the last run used (for returning to the same view after applying it)."""
+    last = Accounts.get_setting(conn, user["id"], RUN_SETTING) or {}
+    return last.get("segments") or list(Betting.SEGMENTS)
 
 
 def flash(applied: Optional[str], ran: Optional[str]) -> Optional[str]:

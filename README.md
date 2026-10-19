@@ -394,6 +394,12 @@ Signed in, the **Analytics** tab checks how your AI odds (with your AI
 weights) have held up, and can suggest better weights and betting rules
 (see [`Optimizer.py`](Optimizer.py)):
 
+A **Parts of the season** filter at the top picks which settled games
+everything on the tab uses, the optimizer included. It starts at the parts
+your betting rules bet on, since preseason games are noisy (teams rest
+players and don't play to win). Each run remembers which parts it used, and
+the page says when the filter has changed since.
+
 - **Calibration**: games grouped by the chance given to the listed team,
   against how often it won, for the AI odds and for Kalshi's price.
 - **Who predicts best**: the Brier score of each AI alone, your weighted AI

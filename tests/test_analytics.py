@@ -223,5 +223,49 @@ class AnalyticsPageTests(unittest.TestCase):
         self.assertIn("New games have settled since", self.client.get("/analytics").text)
 
 
+    def regular_season_games(self):
+        """edge_games() moved to Oct 21-28, inside the shipped leagues.json's NBA regular season (it starts Oct 20)."""
+        return [{**g, "ticker": g["ticker"].replace("26OCT", "26OCR"),
+                 "game_date": f"2026-10-{int(g['game_date'][-2:]) + 16:02d}"} for g in edge_games()]
+
+    def test_load_games_keeps_only_the_parts_of_the_season_asked_for(self):
+        _seed_games(self.db_path, edge_games() + self.regular_season_games())
+        conn = Tracker.connect(self.db_path)
+        try:
+            self.assertEqual({g["segment"] for g in Optimizer.load_games(conn, ["regular"])}, {"regular"})
+            self.assertEqual(len(Optimizer.load_games(conn, ["preseason"])), len(edge_games()))
+            self.assertEqual(Optimizer.segment_counts(conn), {"preseason": 48, "regular": 48})
+        finally:
+            conn.close()
+
+    def test_by_default_it_covers_the_parts_the_user_bets_on(self):
+        _seed_games(self.db_path, edge_games())  # all preseason
+        conn = Tracker.connect(self.db_path)
+        try:
+            Accounts.set_setting(conn, self.uid, "betting", {**RULES, "segments": ["regular", "postseason"]})
+        finally:
+            conn.close()
+        self.sign_in()
+        page = self.client.get("/analytics").text
+        self.assertIn("Needs at least", page)  # no regular-season games yet
+        self.assertNotIn('name="segment" value="preseason" checked', page)
+        page = self.client.get("/analytics?segment=preseason").text
+        self.assertNotIn("Needs at least", page)
+
+    def test_a_run_uses_and_remembers_the_filter(self):
+        _seed_games(self.db_path, edge_games() + self.regular_season_games())
+        self.sign_in()
+        r = self.client.post("/analytics/run", data={"segment": ["regular"]}, follow_redirects=False)
+        self.assertIn("segment=regular", r.headers["location"])
+        run = self.setting("analytics_run")
+        self.assertEqual((run["segments"], run["games"]), (["regular"], 48))
+        self.assertIn("That's not the parts of the season ticked above",
+                      self.client.get("/analytics?segment=preseason&segment=regular").text)
+        self.assertNotIn("That's not the parts of the season ticked above",
+                         self.client.get("/analytics?segment=regular").text)
+        r = self.client.post("/analytics/apply", data={"which": "rules"}, follow_redirects=False)
+        self.assertIn("segment=regular", r.headers["location"])  # back to the view the run was for
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -21,7 +21,7 @@ from urllib.parse import quote
 
 from starlette.background import BackgroundTask
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -665,10 +665,10 @@ def save_betting_rules(
 # --- Analytics tab: calibration, edge vs returns, and the optimizer (see webapp/analytics.py) ---
 
 def _render_analytics(request: Request, conn: sqlite3.Connection, message: Optional[str] = None,
-                      errors: Optional[list] = None, status_code: int = 200):
+                      errors: Optional[list] = None, status_code: int = 200, segments: Optional[list] = None):
     return templates.TemplateResponse(
         request, "analytics.html",
-        {"a": analytics.view(conn, request.state.user), "message": message, "errors": errors or [],
+        {"a": analytics.view(conn, request.state.user, segments), "message": message, "errors": errors or [],
          "ai_names": DEFAULT_LLM_NAMES, "active_tab": "analytics"},
         status_code=status_code,
     )
@@ -676,19 +676,26 @@ def _render_analytics(request: Request, conn: sqlite3.Connection, message: Optio
 
 @app.get("/analytics", response_class=HTMLResponse)
 def analytics_page(request: Request, applied: Optional[str] = None, ran: Optional[str] = None,
-                   conn: sqlite3.Connection = Depends(get_db)):
+                   segment: list[str] = Query([]), conn: sqlite3.Connection = Depends(get_db)):
+    """`segment` (repeatable) picks the parts of the season analyzed; none: the ones the user bets on."""
     _require_user(request)
-    return _render_analytics(request, conn, message=analytics.flash(applied and applied[:100], ran))
+    return _render_analytics(request, conn, message=analytics.flash(applied and applied[:100], ran),
+                             segments=segment)
+
+
+def _analytics_url(segments: list[str], **params) -> str:
+    query = "&".join([f"segment={quote(s)}" for s in segments] + [f"{k}={quote(v)}" for k, v in params.items()])
+    return f"/analytics?{query}#optimizer"
 
 
 @app.post("/analytics/run", response_class=HTMLResponse)
-def run_optimizer(request: Request, conn: sqlite3.Connection = Depends(get_db)):
+def run_optimizer(request: Request, segment: list[str] = Form([]), conn: sqlite3.Connection = Depends(get_db)):
     user = _require_user(request)
     try:
-        analytics.run(conn, user)
+        result = analytics.run(conn, user, segment)
     except settings.SettingsError as e:
-        return _render_analytics(request, conn, errors=e.errors, status_code=400)
-    return RedirectResponse("/analytics?ran=1#optimizer", status_code=303)
+        return _render_analytics(request, conn, errors=e.errors, status_code=400, segments=segment)
+    return RedirectResponse(_analytics_url(result["segments"], ran="1"), status_code=303)
 
 
 @app.post("/analytics/apply", response_class=HTMLResponse)
@@ -698,7 +705,8 @@ def apply_optimized(request: Request, which: str = Form(""), conn: sqlite3.Conne
         applied = analytics.apply(conn, user, which)
     except settings.SettingsError as e:
         return _render_analytics(request, conn, errors=e.errors, status_code=400)
-    return RedirectResponse(f"/analytics?applied={quote(' and '.join(applied))}#optimizer", status_code=303)
+    return RedirectResponse(_analytics_url(analytics.run_segments(conn, user), applied=" and ".join(applied)),
+                            status_code=303)
 
 
 # --- Admin: data -- move history in, get generated spreadsheets out ---

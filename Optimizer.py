@@ -62,10 +62,13 @@ BOOTSTRAP_SAMPLES = 2000
 # Data
 # ---------------------------------------------------------------------------
 
-def load_games(conn: sqlite3.Connection) -> list[dict]:
+def load_games(conn: sqlite3.Connection, segments: Optional[Iterable[str]] = None) -> list[dict]:
     """
     Every settled game, oldest first, each with its Kalshi prices, outcome
-    and every AI's (name, probability, confidence) as "preds".
+    and every AI's (name, probability, confidence) as "preds". `segments`
+    keeps only those parts of the season ("preseason", "regular",
+    "postseason"; SeasonType.segment()) -- preseason results are noisy,
+    since teams rest players and don't play to win.
     """
     rows = conn.execute(
         "SELECT ticker, game_date, league, segment(game_date, league), yes_bid, yes_ask, market_prob, "
@@ -81,7 +84,16 @@ def load_games(conn: sqlite3.Connection) -> list[dict]:
             "outcome": outcome, "tied": bool(tied), "preds": [],
         })
         game["preds"].append((llm.lower(), prob, confidence))
-    return list(games.values())
+    wanted = None if segments is None else set(segments)
+    return [g for g in games.values() if wanted is None or g["segment"] in wanted]
+
+
+def segment_counts(conn: sqlite3.Connection) -> dict[str, int]:
+    """Settled games in each part of the season, for the filter's labels."""
+    counts: dict[str, int] = {}
+    for g in load_games(conn):
+        counts[g["segment"]] = counts.get(g["segment"], 0) + 1
+    return counts
 
 
 def ai_names(games: list[dict]) -> list[str]:
