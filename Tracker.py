@@ -81,6 +81,17 @@ CREATE TABLE IF NOT EXISTS bets (
     order_id       TEXT               -- Kalshi's order id (demo/live only)
 );
 CREATE INDEX IF NOT EXISTS idx_bets_ticker ON bets (ticker);
+
+-- The Kalshi account's cash balance now and then (demo/live betting), for the
+-- Betting tab's balance chart: one row per daily run, plus page views that see
+-- a new value (Betting.record_balance()).
+CREATE TABLE IF NOT EXISTS balance_history (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    recorded_at    TEXT    NOT NULL,  -- local time, ISO
+    mode           TEXT    NOT NULL,  -- "demo" or "live"
+    balance        REAL    NOT NULL   -- available cash, USD
+);
+CREATE INDEX IF NOT EXISTS idx_balance_history_mode ON balance_history (mode, recorded_at);
 """
 
 # Columns added after the table first shipped. CREATE TABLE IF NOT EXISTS

@@ -266,6 +266,27 @@ def place(conn: sqlite3.Connection, candidates: list[dict], config: Optional[dic
     return placed
 
 
+def record_balance(conn: sqlite3.Connection, mode: str, balance: float, force: bool = False) -> bool:
+    """
+    Note a demo/live account's cash balance for the Betting tab's chart.
+    Unless `force` (the daily run's once-a-day snapshot), a value equal to
+    the last one recorded today is skipped, so page views don't pile up
+    duplicate points. Returns whether a row was added.
+    """
+    now = datetime.datetime.now().isoformat(timespec="seconds")
+    if not force:
+        last = conn.execute(
+            "SELECT recorded_at, balance FROM balance_history WHERE mode = ? ORDER BY recorded_at DESC, id DESC "
+            "LIMIT 1", (mode,)
+        ).fetchone()
+        if last and last[0][:10] == now[:10] and abs(last[1] - balance) < 0.005:
+            return False
+    conn.execute("INSERT INTO balance_history (recorded_at, mode, balance) VALUES (?, ?, ?)",
+                 (now, mode, round(balance, 2)))
+    conn.commit()
+    return True
+
+
 def send(bet: dict) -> Optional[dict]:
     """
     Send a demo/live bet to Kalshi as an immediate-or-cancel buy at its

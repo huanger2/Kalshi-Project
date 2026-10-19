@@ -246,6 +246,21 @@ class DailyRunBettingTests(DailyLogTestCase):
     def test_live_bets_are_sent_to_kalshi_and_recorded_as_filled(self):
         self.assert_sent_and_recorded_as_filled("live")
 
+    def test_a_demo_run_records_the_balance_even_without_bets(self):
+        self.set_rules(mode="demo", min_edge=0.5)
+        with mock.patch("Kalshi.get_balance", return_value=187.25):
+            self.run_day(OCT4, TODAY_MARKETS[:2])
+        conn = Tracker.connect(self.db_path)
+        try:
+            self.assertEqual(conn.execute("SELECT mode, balance FROM balance_history").fetchall(), [("demo", 187.25)])
+        finally:
+            conn.close()
+
+    def test_a_balance_failure_still_logs_the_game(self):
+        self.set_rules(mode="live", min_edge=0.5)
+        with mock.patch("Kalshi.get_balance", side_effect=RuntimeError("HTTP 401")):
+            self.assertEqual(len(self.run_day(OCT4, TODAY_MARKETS[:2])), 1)
+
     def test_paper_bets_never_reach_kalshi(self):
         with mock.patch("Kalshi.buy", side_effect=AssertionError("sent a paper bet")):
             self.run_day(OCT4, TODAY_MARKETS[:2])
@@ -321,6 +336,26 @@ class BettingViewTests(BettingConfigTestCase):
                                          ("KXNBAGAME-26OCT04GGGHHH-GGG", "yes", 0.50, 10)])
         self.conn = Tracker.connect(self.db_path)
         self.addCleanup(self.conn.close)
+
+    def test_paper_balance_is_running_settled_pnl_by_game_day(self):
+        bets = [{"game_date": "2026-10-05", "status": "lost", "pnl": -5.1},
+                {"game_date": "2026-10-04", "status": "won", "pnl": 3.0},
+                {"game_date": "2026-10-04", "status": "won", "pnl": 1.5},
+                {"game_date": "2026-10-06", "status": "pending", "pnl": None}]
+        self.assertEqual(betting.balance_series(self.conn, "paper", bets), {
+            "kind": "pnl", "points": [{"x": "2026-10-04", "y": 4.5}, {"x": "2026-10-05", "y": -0.6}]})
+
+    def test_demo_and_live_balance_comes_from_recorded_snapshots(self):
+        with mock.patch("datetime.datetime") as dt:
+            for when, mode, value in (("2026-10-04T09:00:00", "demo", 200.0), ("2026-10-04T10:00:00", "demo", 200.0),
+                                      ("2026-10-04T11:00:00", "demo", 195.04), ("2026-10-04T12:00:00", "live", 50.0),
+                                      ("2026-10-05T09:00:00", "demo", 195.04)):
+                dt.now.return_value.isoformat.return_value = when
+                Betting.record_balance(self.conn, mode, value)
+        # 10:00 repeated 9:00's value the same day, so it was skipped; the next day's repeat wasn't.
+        self.assertEqual(betting.balance_series(self.conn, "demo", [])["points"], [
+            {"x": "2026-10-04T09:00:00", "y": 200.0}, {"x": "2026-10-04T11:00:00", "y": 195.04},
+            {"x": "2026-10-05T09:00:00", "y": 195.04}])
 
     def test_bets_get_their_result_from_the_game(self):
         statuses = {b["ticker"][-3:]: b["status"] for b in betting.list_bets(self.conn)}
@@ -460,6 +495,19 @@ class BettingPageTests(BettingConfigTestCase):
             r = self.client.get("/betting")
         self.assertEqual(r.status_code, 200)
         self.assertIn("HTTP 401", r.text)
+
+    def test_the_balance_chart(self):
+        self.sign_in()
+        page = self.client.get("/betting").text
+        self.assertIn("Paper balance over time", page)
+        self.assertIn('id="balance-data"', page)  # the one settled paper bet is a point
+        self.assertIn("/static/balance-chart.js", page)
+        self.config_path.write_text(json.dumps({**RULES, "mode": "demo"}), encoding="utf-8")
+        with mock.patch("Kalshi.has_credentials", return_value=True), \
+             mock.patch("Kalshi.get_balance", return_value=250.5):
+            page = self.client.get("/betting").text  # this view records a first snapshot
+        self.assertIn("Kalshi demo balance over time", page)
+        self.assertIn('"y": 250.5', page)
 
     def test_hosted_saves_go_to_the_volume(self):
         volume = self.dir / "volume"

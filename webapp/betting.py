@@ -7,8 +7,10 @@ and a what-if backtest that replays the rules over every settled game
 already logged, to help pick a threshold.
 
 A bet's P&L is derived at read time from its game's outcome in the
-predictions table (Betting.result()), so this module only reads. Paper,
-demo and live bets are shown one mode at a time, never added together.
+predictions table (Betting.result()), so this module only reads -- apart
+from noting a demo/live account's balance when the page fetches it, for
+the balance chart. Paper, demo and live bets are shown one mode at a time,
+never added together.
 """
 
 import sqlite3
@@ -116,6 +118,31 @@ def backtest(conn: sqlite3.Connection, config: dict) -> list[dict]:
     return rows
 
 
+def balance_series(conn: sqlite3.Connection, mode: str, bets: list[dict]) -> dict:
+    """
+    The balance chart's line for `mode`. Demo/live: the Kalshi account's
+    recorded cash balance (balance_history). Paper has no account, so its
+    "balance" is the running total of settled P&L by game day, from $0.
+
+    Returns {"kind": "balance"/"pnl", "points": [{"x": ISO date or time, "y": dollars}]}.
+    """
+    if mode in Betting.TRADING_MODES:
+        rows = conn.execute(
+            "SELECT recorded_at, balance FROM balance_history WHERE mode = ? ORDER BY recorded_at, id", (mode,)
+        ).fetchall()
+        return {"kind": "balance", "points": [{"x": at, "y": round(balance, 2)} for at, balance in rows]}
+
+    by_day: dict[str, float] = {}
+    for bet in bets:
+        if bet["status"] != "pending" and bet["game_date"]:
+            by_day[bet["game_date"]] = by_day.get(bet["game_date"], 0.0) + bet["pnl"]
+    points, total = [], 0.0
+    for day in sorted(by_day):
+        total += by_day[day]
+        points.append({"x": day, "y": round(total, 2)})
+    return {"kind": "pnl", "points": points}
+
+
 def account(mode: str) -> dict:
     """The Kalshi account a demo/live mode bets from: whether keys are set, and its cash balance."""
     info = {"mode": mode, "credentials": Kalshi.has_credentials(mode), "balance": None, "error": None}
@@ -138,6 +165,9 @@ def view(conn: sqlite3.Connection, shown: Optional[str] = None) -> dict:
     if shown not in tabs:
         shown = config["mode"] if config["mode"] in tabs else (tabs[0] if tabs else "paper")
     bets = list_bets(conn, shown)
+    acct = account(config["mode"]) if config["mode"] in Betting.TRADING_MODES else None
+    if acct and acct["balance"] is not None:
+        Betting.record_balance(conn, acct["mode"], acct["balance"])
     settled_games = conn.execute(
         "SELECT COUNT(DISTINCT ticker) FROM predictions WHERE outcome IS NOT NULL"
     ).fetchone()[0]
@@ -146,7 +176,8 @@ def view(conn: sqlite3.Connection, shown: Optional[str] = None) -> dict:
         "modes": Betting.MODES,
         "shown": shown,
         "tabs": tabs,
-        "account": account(config["mode"]) if config["mode"] in Betting.TRADING_MODES else None,
+        "account": acct,
+        "balance_chart": balance_series(conn, shown, bets),
         "leagues": list(Leagues.LEAGUES),
         "segments": Betting.SEGMENTS,
         "hosted": bool(DataDir.data_dir()),

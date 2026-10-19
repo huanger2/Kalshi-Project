@@ -404,6 +404,13 @@ def todays_rows(
             Betting.place(db_conn, bets, bet_rules)
         except Exception as e:
             print(f"could not place today's bets: {e}")
+    # A demo/live account's balance after today's bets, for the Betting tab's chart.
+    if bet_rules is not None and bet_rules["mode"] in Betting.TRADING_MODES:
+        try:
+            import Kalshi
+            Betting.record_balance(db_conn, bet_rules["mode"], Kalshi.get_balance(bet_rules["mode"]), force=True)
+        except Exception as e:
+            print(f"could not record the Kalshi {bet_rules['mode']} balance: {e}")
     return rows
 
 

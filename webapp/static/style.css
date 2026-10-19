@@ -469,6 +469,41 @@ table a:hover { text-decoration: underline; }
 .stat .value.edge-up { color: var(--won); }
 .stat .value.edge-down { color: var(--lost); }
 
+/* Line charts (balance-chart.js): 2px line, a 10% wash under it, hairline grid. */
+.chart-block { margin-top: 1.5rem; padding-top: 1.25rem; border-top: 1px solid var(--border); }
+.chart-title { margin-bottom: 0.2rem; }
+.chart-sub { color: var(--muted); font-size: 0.85rem; margin: 0 0 0.75rem; }
+.line-chart { position: relative; margin: 0; min-height: 200px; }
+.line-chart svg { display: block; overflow: visible; }
+.line-chart svg:focus { outline: none; }
+.line-chart svg:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
+.line-chart .grid { stroke: var(--border); stroke-width: 1; }
+.line-chart .zero { stroke: var(--muted); stroke-width: 1; opacity: 0.6; }
+.line-chart .tick { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.line-chart .line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.line-chart .area { fill: var(--accent); opacity: 0.1; stroke: none; }
+.line-chart .dot { fill: var(--accent); stroke: var(--panel); stroke-width: 2; }
+.line-chart .end-label { fill: var(--text); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.line-chart .crosshair { stroke: var(--muted); stroke-width: 1; }
+.chart-tooltip {
+    position: absolute;
+    pointer-events: none;
+    display: flex;
+    flex-direction: column;
+    padding: 0.4rem 0.6rem;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+    white-space: nowrap;
+}
+.chart-tooltip[hidden] { display: none; }
+.chart-tooltip .value { font-weight: 700; font-variant-numeric: tabular-nums; }
+.chart-tooltip .label { color: var(--muted); font-size: 0.78rem; }
+.chart-table { margin-top: 0.5rem; font-size: 0.85rem; }
+.chart-table summary { cursor: pointer; color: var(--muted); }
+.chart-table table { max-width: 24rem; margin-top: 0.4rem; }
+
 /* narrow windows: drop the tagline before it squeezes the account controls */
 @media (max-width: 760px) {
     .tagline { display: none; }

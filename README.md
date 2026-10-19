@@ -366,6 +366,11 @@ daily run already settles. A tied NFL game pays $0.50 a contract.
 
 Besides totals and the bet list, the tab shows:
 
+- **Balance over time**, a line chart under the totals. For demo and live
+  it's the Kalshi account's cash balance, recorded after each daily run and
+  whenever the tab sees a new value. Paper bets have no account, so for them
+  it's the running profit/loss of settled bets from $0, by game day.
+
 - **What if?** replays the current rules over every settled game logged so
   far, at the prices when each was logged, for a range of minimum edges, so
   you can see which threshold would have paid. Each day's cap goes to that
