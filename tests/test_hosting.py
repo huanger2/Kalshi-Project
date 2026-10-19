@@ -294,6 +294,14 @@ class AdminDataPageTests(WebAppHostingTestCase):
         self.as_guest()
         self.assertNotIn('href="/admin/data"', self.client.get("/").text)
 
+    def test_every_page_has_the_theme_switch(self):
+        # Including the sign-in page, before anyone has a role.
+        self.assertIn('data-theme-choice="dark"', self.client.get("/login").text)
+        self.as_guest()
+        page = self.client.get("/").text
+        for choice in ("light", "dark", "auto"):
+            self.assertIn(f'data-theme-choice="{choice}"', page)
+
     def test_uploading_a_database_replaces_it_and_keeps_a_backup(self):
         self.sign_in()
         conn = Tracker.connect(self.db_path)

@@ -72,6 +72,7 @@
     </div>
 </section>
 
+<div class="panel-row">
 <section class="panel" id="rules">
     <h2>Rules</h2>
     <p class="subtitle">Edge is the AI odds for a side minus what one contract on that side costs (its ask), in
@@ -138,6 +139,7 @@
     {% if not b.settled_games %}
         <p class="empty">No settled games yet.</p>
     {% else %}
+    <div class="table-scroll">
     <table class="settings-table">
         <thead><tr><th>Min edge</th><th>Bets</th><th>Win rate</th><th>Staked</th><th>P&amp;L</th><th>ROI</th></tr></thead>
         <tbody>
@@ -153,16 +155,21 @@
             {% endfor %}
         </tbody>
     </table>
+    </div>
     <p class="note">A small sample swings a lot: treat a threshold that looks good over a few dozen games as a hint,
         not a result.</p>
     {% endif %}
 </section>
+</div>
 
 {% if s.bets %}
 <section class="panel" id="breakdowns">
     <h2>Breakdowns</h2>
+    <div class="table-grid">
     {% for g in b.breakdowns %}
+    <div>
     <h3 class="table-heading">{{ g.title }}</h3>
+    <div class="table-scroll">
     <table class="settings-table">
         <thead><tr><th></th><th>Bets</th><th>Pending</th><th>Win rate</th><th>Staked</th><th>P&amp;L</th><th>ROI</th></tr></thead>
         <tbody>
@@ -174,7 +181,10 @@
             {% endfor %}
         </tbody>
     </table>
+    </div>
+    </div>
     {% endfor %}
+    </div>
 </section>
 {% endif %}
 

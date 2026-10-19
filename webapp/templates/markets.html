@@ -51,6 +51,7 @@
     {% if not games %}
         <p class="empty">No {{ selected_league ~ " " if selected_league }}markets tracked{% if selected_date %} for {{ selected_date }}{% endif %}{% if selected_season %} in the {{ selected_season }} season{% endif %}{% if selected_segment %} ({{ selected_segment }}){% endif %}{% if not selected_date and not selected_season and not selected_segment and not selected_league %} yet{% endif %}.</p>
     {% else %}
+    <div class="table-scroll">
     <table class="games">
         <thead>
             <tr>
@@ -96,6 +97,7 @@
             {% endfor %}
         </tbody>
     </table>
+    </div>
     <p class="note">AI odds combine the 3 AIs' predictions, weighting each by its own confidence
         and its accuracy weight (defaults to 1.00 for every AI -- see the accuracy table below),
         not a bare average. Result is colored by whose odds ended up closer to what actually
@@ -111,6 +113,7 @@
     {% if not accuracy %}
         <p class="empty">No settled games yet to score accuracy from.</p>
     {% else %}
+    <div class="table-scroll">
     <table class="accuracy">
         <thead>
             <tr>
@@ -133,6 +136,7 @@
             {% endfor %}
         </tbody>
     </table>
+    </div>
     <p class="note">Lower Brier is better; 0.25 is a coin flip. Weight is how much
         this AI's opinion currently counts for in the EV calculation -- it only
         reflects Brier score once an AI has 20+ settled games (see Tracker.py).</p>

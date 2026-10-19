@@ -58,6 +58,7 @@
             <p class="note">Suggested {{ suggested.asked_at | replace("T", " ") }}. AI answers can be wrong -- check
                 against the sources below before applying, especially model names: a wrong one breaks the next
                 daily run for that AI.</p>
+            <div class="table-scroll">
             <table class="settings-table suggestions">
                 <thead><tr><th>Apply</th><th>Setting</th><th>Now</th><th>Gemini suggests</th></tr></thead>
                 <tbody>
@@ -77,6 +78,7 @@
                     {% endfor %}
                 </tbody>
             </table>
+            </div>
             <button type="submit" class="button inline primary">Apply selected</button>
         </form>
         {% endif %}
@@ -93,6 +95,7 @@
     {% endif %}
 </section>
 
+<div class="panel-row">
 <section class="panel" id="models">
     <h2>AI models</h2>
     <p class="subtitle">Which model each AI is asked with, from the next daily run on.</p>
@@ -128,6 +131,7 @@
         <button type="submit" class="button inline primary">Save weights</button>
     </form>
 </section>
+</div>
 
 <section class="panel" id="pricing">
     <h2>Model pricing</h2>
@@ -135,6 +139,7 @@
         Leave a price blank if unknown -- its calls are recorded with an unknown cost rather than $0.</p>
     {{ section_status("pricing") }}
     <form class="settings-form" method="post" action="/settings/pricing">
+        <div class="table-scroll">
         <table class="settings-table">
             <thead><tr><th>Model</th><th>Input $/1M</th><th>Output $/1M</th><th>Remove</th></tr></thead>
             <tbody>
@@ -156,6 +161,7 @@
                 </tr>
             </tbody>
         </table>
+        </div>
         <button type="submit" class="button inline primary">Save pricing</button>
     </form>
 </section>
@@ -166,11 +172,13 @@
         default shown in grey.</p>
     {{ section_status("leagues") }}
     <form class="settings-form" method="post" action="/settings/leagues">
+        <div class="league-grid">
         {% for lg in s.leagues %}
         <fieldset class="league-settings">
             <legend>{{ lg.code }}</legend>
             <label class="checkbox"><input type="checkbox" name="tracked::{{ lg.code }}" {% if lg.tracked %}checked{% endif %}>
                 Track daily</label>
+            <div class="table-scroll">
             <table class="settings-table">
                 <thead><tr><th>Season</th><th>Regular season starts</th><th>Postseason starts</th></tr></thead>
                 <tbody>
@@ -187,8 +195,10 @@
                     {% endfor %}
                 </tbody>
             </table>
+            </div>
         </fieldset>
         {% endfor %}
+        </div>
         <button type="submit" class="button inline primary">Save leagues</button>
     </form>
 </section>

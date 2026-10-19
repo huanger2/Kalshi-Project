@@ -4,47 +4,88 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}AI vs Kalshi{% endblock %}</title>
+    <script>
+        // Before the stylesheet paints: apply a saved light/dark choice, so the page never flashes the other theme.
+        (function () {
+            try {
+                var theme = localStorage.getItem("theme");
+                if (theme === "light" || theme === "dark") document.documentElement.setAttribute("data-theme", theme);
+            } catch (e) {}
+        })();
+    </script>
     <link rel="stylesheet" href="/static/style.css?v={{ static_version() }}">
 </head>
 <body>
     <header class="site-header">
-        <a class="brand" href="/">AI vs Kalshi</a>
-        <span class="tagline">NBA, NFL, NHL &amp; MLB prediction markets, compared</span>
-        {% if request.state.role %}
-        <div class="account">
-            {% if request.state.role == "admin" %}
-                <span>Signed in</span>
-                <form method="post" action="/logout"><button type="submit" class="link-button">Sign out</button></form>
-            {% else %}
-                <span>Guest</span>
-                <a href="/login?next={{ request.url.path | urlencode }}">Sign in</a>
-            {% endif %}
+        <div class="site-header-inner">
+            <a class="brand" href="/">AI vs Kalshi</a>
+            <span class="tagline">NBA, NFL, NHL &amp; MLB prediction markets, compared</span>
+            <div class="account">
+                <div class="theme-switch" role="group" aria-label="Color theme">
+                    <button type="button" data-theme-choice="light" aria-pressed="false" title="Light theme">Light</button>
+                    <button type="button" data-theme-choice="dark" aria-pressed="false" title="Dark theme">Dark</button>
+                    <button type="button" data-theme-choice="auto" aria-pressed="true" title="Follow the system setting">Auto</button>
+                </div>
+                {% if request.state.role == "admin" %}
+                    <span>Signed in</span>
+                    <form method="post" action="/logout"><button type="submit" class="link-button">Sign out</button></form>
+                {% elif request.state.role %}
+                    <span>Guest</span>
+                    <a href="/login?next={{ request.url.path | urlencode }}">Sign in</a>
+                {% endif %}
+            </div>
         </div>
-        {% endif %}
     </header>
     {% if request.state.role %}
     <nav class="tabs">
-        {% set tracked = tracked_leagues() %}
-        <a href="/" class="{% if active_tab == 'markets' %}active{% endif %}">All markets</a>
-        {% for lg in league_codes %}
-            <a href="/league/{{ lg }}"
-               class="{% if active_tab == lg %}active{% endif %}{% if lg not in tracked %} untracked{% endif %}"
-               {% if lg not in tracked %}title="Not tracking {{ lg }}"{% endif %}>{{ lg }}</a>
-        {% endfor %}
-        <span class="tab-divider" aria-hidden="true"></span>
-        {% for name in ai_names %}
-            <a href="/ai/{{ name }}" class="{% if active_tab == name %}active{% endif %}">{{ name }}</a>
-        {% endfor %}
-        {% if request.state.role == "admin" %}
+        <div class="tabs-inner">
+            {% set tracked = tracked_leagues() %}
+            <a href="/" class="{% if active_tab == 'markets' %}active{% endif %}">All markets</a>
+            {% for lg in league_codes %}
+                <a href="/league/{{ lg }}"
+                   class="{% if active_tab == lg %}active{% endif %}{% if lg not in tracked %} untracked{% endif %}"
+                   {% if lg not in tracked %}title="Not tracking {{ lg }}"{% endif %}>{{ lg }}</a>
+            {% endfor %}
             <span class="tab-divider" aria-hidden="true"></span>
-            <a href="/betting" class="{% if active_tab == 'betting' %}active{% endif %}">Betting</a>
-            <a href="/settings" class="{% if active_tab == 'settings' %}active{% endif %}">Settings</a>
-            <a href="/admin/data" class="{% if active_tab == 'data' %}active{% endif %}">Data</a>
-        {% endif %}
+            {% for name in ai_names %}
+                <a href="/ai/{{ name }}" class="{% if active_tab == name %}active{% endif %}">{{ name }}</a>
+            {% endfor %}
+            {% if request.state.role == "admin" %}
+                <span class="tab-divider" aria-hidden="true"></span>
+                <a href="/betting" class="{% if active_tab == 'betting' %}active{% endif %}">Betting</a>
+                <a href="/settings" class="{% if active_tab == 'settings' %}active{% endif %}">Settings</a>
+                <a href="/admin/data" class="{% if active_tab == 'data' %}active{% endif %}">Data</a>
+            {% endif %}
+        </div>
     </nav>
     {% endif %}
     <main>
         {% block content %}{% endblock %}
     </main>
+    <script>
+        // The header's Light / Dark / Auto switch. Auto drops the saved choice and follows the system setting.
+        (function () {
+            var root = document.documentElement;
+            var buttons = document.querySelectorAll("[data-theme-choice]");
+            function show(choice) {
+                buttons.forEach(function (b) {
+                    b.setAttribute("aria-pressed", String(b.getAttribute("data-theme-choice") === choice));
+                });
+            }
+            show(root.getAttribute("data-theme") || "auto");
+            buttons.forEach(function (b) {
+                b.addEventListener("click", function () {
+                    var choice = b.getAttribute("data-theme-choice");
+                    if (choice === "auto") root.removeAttribute("data-theme");
+                    else root.setAttribute("data-theme", choice);
+                    try {
+                        if (choice === "auto") localStorage.removeItem("theme");
+                        else localStorage.setItem("theme", choice);
+                    } catch (e) {}
+                    show(choice);
+                });
+            });
+        })();
+    </script>
 </body>
 </html>

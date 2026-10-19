@@ -108,6 +108,7 @@
     {% if not predictions %}
         <p class="empty">Nothing logged for {{ stats.llm }} yet.</p>
     {% else %}
+    <div class="table-scroll">
     <table class="predictions">
         <thead>
             <tr>
@@ -152,6 +153,7 @@
             {% endfor %}
         </tbody>
     </table>
+    </div>
     {% endif %}
 </section>
 

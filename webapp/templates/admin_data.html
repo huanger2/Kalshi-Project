@@ -16,6 +16,7 @@
     {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
 
     <h2>Download</h2>
+    <div class="table-scroll">
     <table class="data-files">
         <thead>
             <tr><th>File</th><th>What</th><th>Size</th><th>Updated</th></tr>
@@ -53,13 +54,15 @@
             {% endif %}
         </tbody>
     </table>
+    </div>
     {% if not files and not day_logs %}
         <p class="empty">Nothing generated on this server yet -- upload your history below, or wait
             for the first daily run.</p>
     {% endif %}
 </section>
 
-<section class="panel">
+<div class="panel-row">
+<section class="panel" id="spend">
     <h2>API spend</h2>
     {% if spend %}
     <div class="table-scroll">
@@ -122,5 +125,6 @@
         </div>
     </form>
 </section>
+</div>
 
 {% endblock %}

@@ -8,7 +8,8 @@
 <a class="back" href="/">&larr; All markets</a>
 {% endif %}
 
-<section class="panel">
+<div class="panel-row narrow-first">
+<section class="panel" id="game">
     <h1>{{ game.team }} vs {{ game.opponent or "?" }}</h1>
     <p class="subtitle">{{ game.league or "?" }} &middot; {{ game.game_date or "date unknown" }} &middot; {{ game.ticker }}</p>
 
@@ -42,6 +43,7 @@
 
 <section class="panel">
     <h2>AI vs Kalshi</h2>
+    <div class="table-scroll">
     <table class="predictions">
         <thead>
             <tr>
@@ -66,8 +68,10 @@
             {% endfor %}
         </tbody>
     </table>
+    </div>
     <p class="note">Edge is the AI's predicted win % minus Kalshi's: positive means
         the AI thought {{ game.team }} was more likely to win than the market priced it.</p>
 </section>
+</div>
 
 {% endblock %}
