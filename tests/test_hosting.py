@@ -255,12 +255,23 @@ class TriggerScriptTests(unittest.TestCase):
         self.assertTrue(any("still running" in msg for msg, _ in lines))
         self.assertTrue(all(kw.get("flush") for _, kw in lines))  # never held back in a pipe
 
-    def test_the_cron_services_config_runs_the_trigger_not_the_webapp(self):
-        # railway.json applies to every service from this repo and starts the webapp; a cron
-        # service started that way never exits, so it gets its own config file.
-        config = json.loads((Path(__file__).parent.parent / "railway.cron.json").read_text(encoding="utf-8"))
-        self.assertEqual(config["deploy"]["startCommand"], "python trigger_daily_run.py")
-        self.assertEqual(config["deploy"]["cronSchedule"], "0 14 * * *")
+    def test_the_start_command_runs_the_trigger_on_the_cron_service(self):
+        # Railway gives the cron service the website's start command (python -m webapp);
+        # DAILY_TRIGGER makes that run the trigger once and exit, instead of a server that never stops.
+        from webapp import __main__ as entry
+        with mock.patch.dict("os.environ", {"DAILY_TRIGGER": "1"}),              mock.patch.object(trigger_daily_run, "main", return_value=0) as trigger,              mock.patch("uvicorn.run", side_effect=AssertionError("started the website")):
+            with self.assertRaises(SystemExit) as exit_:
+                entry.main()
+        trigger.assert_called_once()
+        self.assertEqual(exit_.exception.code, 0)
+
+    def test_the_start_command_serves_the_website_otherwise(self):
+        from webapp import __main__ as entry
+        with mock.patch.dict("os.environ"):
+            os.environ.pop("DAILY_TRIGGER", None)
+            with mock.patch.object(trigger_daily_run, "main", side_effect=AssertionError("ran the trigger")),                  mock.patch("uvicorn.run") as serve:
+                entry.main()
+        self.assertEqual(serve.call_args.args[0], "webapp.main:app")
 
     def test_missing_settings(self):
         with mock.patch.dict("os.environ"):

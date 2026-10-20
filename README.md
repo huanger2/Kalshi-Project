@@ -538,18 +538,18 @@ straight from Kalshi, even without its day's spreadsheet on the server.
 **Cron service:**
 
 1. Add a new service from the same GitHub repo.
-2. In its **Settings**, under **Config-as-code**, set the Railway config
-   file to `/railway.cron.json`. That file sets the start command
-   (`python trigger_daily_run.py`) and the cron schedule (`0 14 * * *`).
-   **Don't set them in the dashboard instead:** the repo's `railway.json`
-   applies to every service built from it, overrides dashboard settings,
-   and starts the website, which never exits, so a cron service left on it
-   shows "running" forever and never triggers anything. Cron schedules are
-   in UTC: `0 14 * * *` is 9am US Central during daylight saving time, 8am
-   in winter.
-3. In its **Variables**, set `DAILY_RUN_URL` to the site's URL (e.g.
-   `https://your-app.up.railway.app`) and `DAILY_RUN_TOKEN` to the same
-   secret as the web service's.
+2. In its **Settings**, set the cron schedule to `0 14 * * *` (UTC: 9am
+   US Central during daylight saving time, 8am in winter), and the restart
+   policy to **Never** if offered. Leave the start command alone: Railway
+   gives this service the website's (`python -m webapp`, from
+   `railway.json`), and the `DAILY_TRIGGER` variable below makes that run
+   the trigger once and exit. Without it the cron service starts a second
+   copy of the website, which never exits, so it shows "running" forever and
+   never triggers anything.
+3. In its **Variables**, set `DAILY_TRIGGER=1`, `DAILY_RUN_URL` to the
+   site's URL (e.g. `https://your-app.up.railway.app`) and
+   `DAILY_RUN_TOKEN` to the same secret as the web service's. Never set
+   `DAILY_TRIGGER` on the web service: it would stop serving the site.
 
 To test it without waiting for 14:00 UTC, run the trigger from your own
 machine. It runs the real daily job on the server, AI calls included:
