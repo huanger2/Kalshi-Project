@@ -25,7 +25,7 @@ from typing import Optional
 _lock = threading.Lock()  # held for the whole run: one at a time
 _status_lock = threading.Lock()
 _status = {"run_id": 0, "state": "idle", "started_at": None, "finished_at": None,
-           "settled": None, "logged": None, "error": None}
+           "settled": None, "logged": None, "error": None, "leagues": None}
 
 STATUS_NAME = "daily_run_status.json"
 
@@ -84,6 +84,29 @@ def status() -> dict:
         return dict(_status)
 
 
+def _ago(then: Optional[float], now: float) -> Optional[str]:
+    """'just now', '12 min ago', '3 h ago', '2 days ago' -- relative, so it reads right in any time zone."""
+    if then is None:
+        return None
+    seconds = max(0, now - then)
+    if seconds < 60:
+        return "just now"
+    if seconds < 3600:
+        return f"{int(seconds // 60)} min ago"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)} h ago"
+    days = int(seconds // 86400)
+    return f"{days} day{'' if days == 1 else 's'} ago"
+
+
+def summary(now: Optional[float] = None) -> dict:
+    """status() plus when it started/finished in words, for the admin's run button."""
+    now = now if now is not None else time.time()
+    current = status()
+    return {**current, "started_ago": _ago(current["started_at"], now),
+            "finished_ago": _ago(current["finished_at"], now)}
+
+
 def _update(**fields) -> None:
     with _status_lock:
         _status.update(fields)
@@ -101,20 +124,22 @@ def _run(run) -> None:
         _lock.release()
 
 
-def start(run=None) -> Optional[int]:
+def start(run=None, leagues: Optional[list[str]] = None) -> Optional[int]:
     """
     Start a daily run in the background. Returns its run id, or None if one
-    is already in progress. `run` defaults to DailyLog.run; injectable so
-    tests don't call the AIs.
+    is already in progress. `leagues` limits it to those leagues (an admin's
+    "run NBA now"); None is every league tracked in leagues.json, like the
+    cron's. `run` defaults to DailyLog.run; injectable so tests don't call
+    the AIs.
     """
     if not _lock.acquire(blocking=False):
         return None
     if run is None:
         import DailyLog
-        run = DailyLog.run
+        run = (lambda: DailyLog.run(leagues=leagues)) if leagues else DailyLog.run
     with _status_lock:
         _status.update(run_id=_status["run_id"] + 1, state="running", started_at=time.time(),
-                       finished_at=None, settled=None, logged=None, error=None)
+                       finished_at=None, settled=None, logged=None, error=None, leagues=leagues)
         run_id = _status["run_id"]
         _save()
     threading.Thread(target=_run, args=(run,), name=f"daily-run-{run_id}", daemon=True).start()

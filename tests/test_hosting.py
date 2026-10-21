@@ -7,6 +7,7 @@ import shutil
 import sqlite3
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -15,6 +16,7 @@ import openpyxl
 from fastapi.testclient import TestClient
 
 import CostTracker
+import Accounts
 import DataDir
 import Leagues
 import Tracker
@@ -194,6 +196,99 @@ class DailyRunEndpointTests(WebAppHostingTestCase):
         with mock.patch.object(daily_run, "start", return_value=None):
             r = self.client.post("/internal/daily-run", headers={"Authorization": "Bearer tok"})
         self.assertEqual(r.status_code, 409)
+
+
+class RunNowButtonTests(WebAppHostingTestCase):
+    """The admin's "run the daily run now" button at the top of the markets pages."""
+
+    IDLE = {"run_id": 3, "state": "done", "started_at": 0.0, "finished_at": 60.0, "settled": 2, "logged": 5,
+            "error": None, "leagues": None}
+
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.object(daily_run, "status", return_value=dict(self.IDLE))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_admins_get_the_button_and_the_status(self):
+        self.sign_in()
+        home = self.client.get("/").text
+        self.assertIn('action="/admin/daily-run"', home)
+        self.assertIn("Run daily run now", home)
+        self.assertIn("logged 5", home)
+        league = self.client.get("/league/NBA").text
+        self.assertIn('name="league" value="NBA"', league)
+        self.assertIn("Run NBA now", league)
+
+    def test_guests_and_users_get_neither(self):
+        self.as_guest()
+        self.assertNotIn('action="/admin/daily-run"', self.client.get("/").text)
+        self.assertEqual(self.client.post("/admin/daily-run").status_code, 403)
+        self.assertEqual(self.client.get("/admin/daily-run").status_code, 403)
+        conn = Tracker.connect(self.db_path)
+        try:
+            Accounts.bootstrap(conn)
+            Accounts.create_user(conn, "pat", "pat-password")
+        finally:
+            conn.close()
+        self.client.post("/login", data={"username": "pat", "password": "pat-password", "next": "/"})
+        self.assertNotIn('action="/admin/daily-run"', self.client.get("/").text)
+        self.assertEqual(self.client.post("/admin/daily-run").status_code, 403)
+
+    def test_running_one_league_from_its_tab(self):
+        self.sign_in()
+        with mock.patch.object(daily_run, "start", return_value=4) as start:
+            r = self.client.post("/admin/daily-run", data={"league": "nba"}, follow_redirects=False)
+        start.assert_called_once_with(leagues=["NBA"])
+        self.assertEqual(r.headers["location"], "/league/NBA?run=started")
+        self.assertIn("Started the daily run", self.client.get(r.headers["location"]).text)
+
+    def test_running_every_league_and_a_busy_refusal(self):
+        self.sign_in()
+        with mock.patch.object(daily_run, "start", return_value=None) as start:
+            r = self.client.post("/admin/daily-run", follow_redirects=False)
+        start.assert_called_once_with(leagues=None)
+        self.assertEqual(r.headers["location"], "/?run=busy")
+        self.assertIn("already going", self.client.get(r.headers["location"]).text)
+
+    def test_an_unknown_league_is_a_404(self):
+        self.sign_in()
+        with mock.patch.object(daily_run, "start") as start:
+            self.assertEqual(self.client.post("/admin/daily-run", data={"league": "XFL"}).status_code, 404)
+        start.assert_not_called()
+
+    def test_while_running_the_page_says_so_and_polls(self):
+        daily_run.status.return_value = {**self.IDLE, "state": "running", "finished_at": None, "leagues": ["NBA"]}
+        self.sign_in()
+        page = self.client.get("/league/NBA").text
+        self.assertIn("Daily run #3 for NBA", page)
+        self.assertIn("/static/daily-run-status.js", page)
+        self.assertIn("disabled", page.split('action="/admin/daily-run"')[1].split("</form>")[0])
+        self.assertEqual(self.client.get("/admin/daily-run").json()["state"], "running")
+
+
+class DailyRunLeagueTests(unittest.TestCase):
+    def test_a_run_for_some_leagues_passes_them_to_the_daily_log(self):
+        import DailyLog
+        saved = dict(daily_run._status)
+        self.addCleanup(daily_run._status.update, saved)
+        done = threading.Event()
+        with mock.patch.object(daily_run, "_save"),              mock.patch.object(DailyLog, "run", side_effect=lambda **kw: (done.set(), (0, 0))[1]) as run:
+            self.assertIsNotNone(daily_run.start(leagues=["NFL"]))
+            self.assertTrue(done.wait(5))
+            for _ in range(50):  # let the background thread record its result
+                if daily_run.status()["state"] != "running":
+                    break
+                time.sleep(0.02)
+        run.assert_called_once_with(leagues=["NFL"])
+        self.assertEqual(daily_run.status()["leagues"], ["NFL"])
+
+    def test_ages_read_in_words(self):
+        self.assertEqual(daily_run._ago(1000.0, 1030.0), "just now")
+        self.assertEqual(daily_run._ago(1000.0, 1000.0 + 12 * 60), "12 min ago")
+        self.assertEqual(daily_run._ago(0.0, 3 * 3600.0), "3 h ago")
+        self.assertEqual(daily_run._ago(0.0, 2 * 86400.0), "2 days ago")
+        self.assertIsNone(daily_run._ago(None, 5.0))
 
 
 class TriggerScriptTests(unittest.TestCase):

@@ -250,8 +250,13 @@ def _render_markets(
     date: Optional[str],
     season: Optional[str],
     segment: Optional[str],
+    run: Optional[str] = None,
 ):
-    """The markets table: every league's games (league=None) or one league's tab."""
+    """
+    The markets table: every league's games (league=None) or one league's
+    tab. Admins also get the daily run's status and a button to run it now
+    (`run` is how the last press went: "started" or "busy").
+    """
     games = queries.list_games(conn, game_date=date, segment=segment, season_year=season, league=league,
                                weights=_viewer_weights(request, conn))
     dates = queries.list_game_dates(conn, segment=segment, season_year=season, league=league)
@@ -265,6 +270,8 @@ def _render_markets(
             "seasons": seasons, "selected_season": season,
             "segments": queries.SEGMENTS, "selected_segment": segment,
             "ai_names": DEFAULT_LLM_NAMES, "active_tab": league or "markets",
+            "daily": daily_run.summary() if request.state.role == auth.ADMIN else None,
+            "run_flash": run if run in ("started", "busy") else None,
         },
     )
 
@@ -275,9 +282,10 @@ def markets_page(
     date: Optional[str] = None,
     season: Optional[str] = None,
     segment: Optional[str] = None,
+    run: Optional[str] = None,
     conn: sqlite3.Connection = Depends(get_db),
 ):
-    return _render_markets(request, conn, None, date, season, segment)
+    return _render_markets(request, conn, None, date, season, segment, run)
 
 
 @app.get("/league/{code}", response_class=HTMLResponse)
@@ -287,9 +295,10 @@ def league_markets_page(
     date: Optional[str] = None,
     season: Optional[str] = None,
     segment: Optional[str] = None,
+    run: Optional[str] = None,
     conn: sqlite3.Connection = Depends(get_db),
 ):
-    return _render_markets(request, conn, _league_or_404(code), date, season, segment)
+    return _render_markets(request, conn, _league_or_404(code), date, season, segment, run)
 
 
 @app.post("/league/{code}/tracking")
@@ -305,6 +314,30 @@ def set_league_tracking(request: Request, code: str, enabled: str = Form(...)):
     league = _league_or_404(code)
     Leagues.set_enabled(league, enabled == "1")
     return RedirectResponse(f"/league/{league}", status_code=303)
+
+
+@app.post("/admin/daily-run")
+def run_daily_now(request: Request, league: str = Form("")):
+    """
+    An admin's "run it now", from the top of the markets pages: the same
+    daily run the cron triggers, in the background -- every tracked league,
+    or just `league` from its own tab. Back to the page it came from.
+    """
+    _require_admin(request)
+    leagues = [_league_or_404(league)] if league else None
+    run_id = daily_run.start(leagues=leagues)
+    back = f"/league/{leagues[0]}" if leagues else "/"
+    print(f"daily run requested by {request.state.user['username']}"
+          f"{' for ' + leagues[0] if leagues else ''}: "
+          f"{'started run #' + str(run_id) if run_id else 'one is already in progress'}", flush=True)
+    return RedirectResponse(f"{back}?run={'started' if run_id else 'busy'}", status_code=303)
+
+
+@app.get("/admin/daily-run")
+def daily_run_progress(request: Request):
+    """The daily run's status for a signed-in admin's page, which polls it while a run is going."""
+    _require_admin(request)
+    return daily_run.summary()
 
 
 @app.get("/markets/{ticker}", response_class=HTMLResponse)

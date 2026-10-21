@@ -563,6 +563,13 @@ Once a Railway run has succeeded, remove the Windows task
 (`.\schedule_task.ps1 -Uninstall`), so the two don't both pay for every
 AI call each morning, into two diverging databases.
 
+To run it by hand, an admin can press **Run daily run now** at the top of
+All markets (every tracked league), or **Run NBA now** (etc.) on a league's
+tab (just that league). It's the same run the cron triggers, so it only
+asks the AIs about games not logged yet today. The status line under it
+shows the last run's result, and while one is going the page refreshes
+itself when it finishes.
+
 The **Admin → Data** page also lists everything the daily run
 generates for download, plus a `predictions.xlsx` of every prediction,
 built fresh when downloaded.

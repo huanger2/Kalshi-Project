@@ -340,6 +340,10 @@ th.group { text-align: center; border-bottom: 1px solid var(--border); }
 .temp-password code { font-size: 0.95rem; user-select: all; }
 .account .who { color: var(--text); font-weight: 600; }
 
+.head-actions { display: flex; align-items: center; gap: 0.75rem 1.25rem; flex-wrap: wrap; }
+.head-actions form { margin: 0; }
+.run-status { margin: 0.4rem 0 0.9rem; }
+.run-status .pill { margin-right: 0.25rem; }
 .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
 
 /* The league tab's tracking toggle: a button with role="switch". */

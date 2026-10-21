@@ -6,6 +6,16 @@
     <div class="panel-head">
         <h1>{{ selected_league ~ " markets" if selected_league else "All tracked markets" }}</h1>
         {% set on = selected_league in tracked_leagues() %}
+        <div class="head-actions">
+        {% if daily %}
+            {% set running = daily.state == "running" %}
+            <form method="post" action="/admin/daily-run"
+                  onsubmit="return confirm('{{ ('Run the daily run for ' ~ selected_league) if selected_league else 'Run the daily run for every tracked league' }} now? It settles finished games and asks each AI about every game not logged yet today, which costs API calls.');">
+                {% if selected_league %}<input type="hidden" name="league" value="{{ selected_league }}">{% endif %}
+                <button type="submit" class="button inline" {% if running %}disabled{% endif %}>
+                    {% if running %}Daily run going...{% elif selected_league %}Run {{ selected_league }} now{% else %}Run daily run now{% endif %}</button>
+            </form>
+        {% endif %}
         {% if selected_league and request.state.role == "admin" %}
             <form method="post" action="/league/{{ selected_league }}/tracking">
                 <input type="hidden" name="enabled" value="{{ '0' if on else '1' }}">
@@ -16,7 +26,24 @@
                 </button>
             </form>
         {% endif %}
+        </div>
     </div>
+    {% if daily %}
+    {% set scope = (" for " ~ daily.leagues | join(", ")) if daily.leagues else "" %}
+    {% if run_flash == "started" %}<p class="form-message" role="status">Started the daily run{{ scope }}. It runs on the
+        server; this page refreshes when it's done.</p>
+    {% elif run_flash == "busy" %}<p class="form-error" role="alert">A daily run is already going; wait for it to
+        finish.</p>{% endif %}
+    <p class="note run-status" id="run-status" data-state="{{ daily.state }}" data-run="{{ daily.run_id }}">
+        {% if daily.state == "running" %}<span class="pill pending">Running</span> Daily run #{{ daily.run_id }}{{ scope }},
+            started {{ daily.started_ago }}. This page refreshes when it finishes.
+        {% elif daily.state == "done" %}Last daily run{{ scope }}: finished {{ daily.finished_ago }}, settled
+            {{ daily.settled }} game{{ "" if daily.settled == 1 else "s" }}, logged {{ daily.logged }}.
+        {% elif daily.state == "failed" %}<span class="pill lost">Failed</span> Last daily run{{ scope }}
+            ({{ daily.finished_ago or daily.started_ago }}): {{ daily.error }}
+        {% else %}No daily run since the server started.{% endif %}
+    </p>
+    {% endif %}
     {% if selected_league %}
         <p class="subtitle">
             {% if on %}The daily run logs every {{ selected_league }} game and asks each AI about it.
@@ -144,3 +171,5 @@
 </section>
 
 {% endblock %}
+
+{% block scripts %}{% if daily and daily.state == "running" %}<script src="/static/daily-run-status.js?v={{ static_version() }}" defer></script>{% endif %}{% endblock %}
