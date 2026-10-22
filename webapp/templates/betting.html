@@ -142,6 +142,13 @@
             <input id="max_price" name="max_price" type="number" step="1" min="0" max="99" value="{{ '%g' | format(c.max_price * 100) }}" required>
             <label for="min_ais">AIs that must answer</label>
             <input id="min_ais" name="min_ais" type="number" step="1" min="1" max="10" value="{{ c.min_ais }}" required>
+            <label for="min_confidence">Minimum AI confidence (%)</label>
+            <div>
+                <input id="min_confidence" name="min_confidence" type="number" step="1" min="0" max="100"
+                       value="{{ '%g' | format((c.min_confidence or 0) * 100) }}" required>
+                <span class="muted default-hint">No bet when the AIs' confidence, averaged by your AI weights, is under
+                    this -- however big the edge. 0 turns it off.</span>
+            </div>
             <span class="settings-label">Leagues</span>
             <div class="checkbox-row">
                 {% for code in b.leagues %}

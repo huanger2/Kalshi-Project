@@ -106,6 +106,38 @@ class RuleTests(unittest.TestCase):
         self.assertEqual((found[0]["stake_usd"], found[0]["max_daily_usd"]), (12.0, 30.0))
 
 
+class ConfidenceRuleTests(unittest.TestCase):
+    def confidence_games(self, days=8):
+        """Each day: three confident (90%) 25-point-edge winners, and three unsure (30%) 25-point-edge losers."""
+        games = []
+        for d in range(days):
+            for i in range(3):
+                games.append(game(d * 10 + i, 5 + d, 1, [("a", 0.75, 0.9), ("b", 0.75, 0.9)]))
+            for i in range(3, 6):
+                games.append(game(d * 10 + i, 5 + d, 0, [("a", 0.75, 0.3), ("b", 0.75, 0.3)]))
+        return games
+
+    def test_the_grid_comes_from_the_data(self):
+        grid = Optimizer.confidence_grid(Optimizer._with_consensus(self.confidence_games(), {}))
+        self.assertEqual(grid[0], 0.0)
+        self.assertIn(0.9, grid)
+        self.assertTrue(all(0 <= v <= 1 for v in grid))
+
+    def test_finds_the_confidence_minimum_that_drops_the_unsure_losers(self):
+        rules, bets, _ = Optimizer.best_rules(Optimizer._with_consensus(self.confidence_games(), {}), RULES, 2)
+        self.assertGreater(rules["min_confidence"], 0.3)
+        self.assertTrue(all(b["status"] == "won" for b in bets))
+
+    def test_the_suggestion_includes_it(self):
+        result = Optimizer.optimize_rules(self.confidence_games(), {}, RULES)
+        self.assertGreater(result["suggested"]["rules"]["min_confidence"], 0.3)
+
+    def test_weights_shift_the_confidence(self):
+        preds = [("a", 0.6, 0.9), ("b", 0.6, 0.1)]
+        self.assertAlmostEqual(Optimizer.confidence(preds, {}), 0.5)
+        self.assertAlmostEqual(Optimizer.confidence(preds, {"a": 1.0, "b": 0.0}), 0.9)
+
+
 class DiagnosticTests(unittest.TestCase):
     def test_calibration_buckets(self):
         rows = {(r["low"], r["high"]): r for r in Optimizer.calibration(informative_games(), {"sharp": 1, "noisy": 0})}
@@ -208,6 +240,20 @@ class AnalyticsPageTests(unittest.TestCase):
         self.client.post("/analytics/apply", data={"which": "weights"})
         weights = self.setting("ai_weights")
         self.assertGreater(weights["openai"], weights["claude"])  # "a" was seeded as OpenAI, the one that knew
+
+    def test_a_run_saved_before_the_confidence_rule_still_shows(self):
+        _seed_games(self.db_path, edge_games())
+        self.sign_in()
+        self.client.post("/analytics/run")
+        conn = Tracker.connect(self.db_path)
+        try:
+            run = Accounts.get_setting(conn, self.uid, "analytics_run")
+            run["rules"]["current_rules"].pop("min_confidence")
+            run["rules"]["suggested"]["rules"].pop("min_confidence")
+            Accounts.set_setting(conn, self.uid, "analytics_run", run)
+        finally:
+            conn.close()
+        self.assertEqual(self.client.get("/analytics").status_code, 200)
 
     def test_applying_before_running_is_refused(self):
         self.sign_in()

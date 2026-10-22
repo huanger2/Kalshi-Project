@@ -102,7 +102,7 @@ def list_games(
     not a bare average.
     """
     import AIWeights
-    from EVCalculator import LLMPrediction, consensus_probability
+    from EVCalculator import LLMPrediction, consensus_confidence, consensus_probability
 
     conditions, params = _conditions(segment, season_year, league)
     if game_date:
@@ -131,6 +131,7 @@ def list_games(
     for (ticker, event_ticker, game_league, game_date, team, opponent, yes_bid, yes_ask,
          market_prob, outcome, tied, ai_count, seg, year) in rows:
         ai_prob = consensus_probability(predictions_by_ticker.get(ticker, []))
+        ai_confidence = consensus_confidence(predictions_by_ticker.get(ticker, []))
         tied = bool(tied)
         games.append({
             "ticker": ticker,
@@ -143,6 +144,7 @@ def list_games(
             "yes_ask": yes_ask,
             "market_prob": market_prob,
             "ai_prob": ai_prob,
+            "ai_confidence": ai_confidence,
             "outcome": outcome,
             "tied": tied,
             "ai_count": ai_count,

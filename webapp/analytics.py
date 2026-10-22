@@ -31,7 +31,7 @@ from webapp import betting
 from webapp.settings import MAX_WEIGHT, SettingsError
 
 RUN_SETTING = "analytics_run"
-RULE_KEYS = ["min_edge", "min_price", "max_price", "min_ais"]
+RULE_KEYS = ["min_edge", "min_price", "max_price", "min_ais", "min_confidence"]
 # A suggestion has to beat the current weights' held-out Brier by this much to be recommended.
 BRIER_MARGIN = 0.001
 
@@ -52,7 +52,9 @@ def _verdicts(run: dict) -> dict:
     wf = r["walk_forward"]
     if r["suggested"] is None:
         rules = ("none", f"No rule set placed the {r['min_bets']} bets needed to judge it.")
-    elif r["suggested"]["rules"] == {k: r["current_rules"][k] for k in RULE_KEYS}:
+    # .get: runs saved before min_confidence existed don't have it (0 then meant no minimum).
+    elif ({k: r["suggested"]["rules"].get(k, 0.0) for k in RULE_KEYS}
+          == {k: r["current_rules"].get(k, 0.0) for k in RULE_KEYS}):
         rules = ("same", "The best rules are the ones you already have.")
     elif not wf["days"] or not wf["tuned"]["bets"]:
         rules = ("unclear", "Too few game days to check tuned rules on unseen days yet.")
@@ -159,6 +161,7 @@ def apply(conn: sqlite3.Connection, user: dict, which: str) -> list[str]:
             "min_edge": repr(merged["min_edge"] * 100), "min_price": repr(merged["min_price"] * 100),
             "max_price": repr(merged["max_price"] * 100), "stake_usd": repr(merged["stake_usd"]),
             "max_daily_usd": repr(merged["max_daily_usd"]), "min_ais": str(merged["min_ais"]),
+            "min_confidence": repr(merged["min_confidence"] * 100),
             "leagues": merged["leagues"], "segments": merged["segments"],
             # Applying rules never changes the mode, so a live user isn't asked to re-confirm.
             "confirm_live": "yes" if current["mode"] == "live" else "",

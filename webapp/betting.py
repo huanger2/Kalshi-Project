@@ -110,7 +110,7 @@ def backtest(conn: sqlite3.Connection, config: dict, weights: Optional[dict] = N
         for g in games:
             no_ask = None if g["yes_bid"] is None else 1 - g["yes_bid"]
             bet, _ = Betting.decide(g["ai_prob"], g["ai_count"], g["yes_ask"], no_ask, g["league"], rules,
-                                    segment=g["segment"])
+                                    segment=g["segment"], ai_confidence=g["ai_confidence"])
             if bet:
                 bets.append({**bet, "game_date": g["game_date"], **Betting.result(bet, g["outcome"], g["tied"])})
         bets, _ = Betting.apply_daily_cap(bets, config["max_daily_usd"])
@@ -236,6 +236,9 @@ def _parse(conn: sqlite3.Connection, user_id: int, form: Mapping, check_mode: bo
     stake = _number(form.get("stake_usd", ""), "Dollars per bet", errors, minimum=0.01, maximum=10000, required=True)
     daily = _number(form.get("max_daily_usd", ""), "Daily cap", errors, maximum=100000, required=True)
     min_ais = _number(form.get("min_ais", ""), "AIs that must answer", errors, minimum=1, maximum=10, required=True)
+    # Optional in the form (older callers don't send it): blank means no minimum.
+    min_confidence = (percent("min_confidence", "Minimum AI confidence (%)", 100)
+                      if str(form.get("min_confidence", "")).strip() else 0.0)
     if min_ais is not None and min_ais != int(min_ais):
         errors.append("AIs that must answer: must be a whole number.")
     if min_price is not None and max_price is not None and min_price > max_price:
@@ -253,7 +256,8 @@ def _parse(conn: sqlite3.Connection, user_id: int, form: Mapping, check_mode: bo
         raise SettingsError(errors)
 
     rules = {"mode": mode, "min_edge": min_edge, "stake_usd": stake, "max_daily_usd": daily, "min_price": min_price,
-             "max_price": max_price, "min_ais": int(min_ais), "leagues": leagues, "segments": segments}
+             "max_price": max_price, "min_ais": int(min_ais), "min_confidence": min_confidence or 0.0,
+             "leagues": leagues, "segments": segments}
     return rules, weights
 
 

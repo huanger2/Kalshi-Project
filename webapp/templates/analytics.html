@@ -60,7 +60,7 @@
         <div>
             <h2>Optimizer</h2>
             <p class="subtitle">Fits your AI weights to the settled games, then searches for the betting rules (minimum
-                edge, price range, AIs required) that would have done best with them. Your stake, daily cap, leagues and
+                edge, price range, AIs required, minimum AI confidence) that would have done best with them. Your stake, daily cap, leagues and
                 seasons stay as they are: those are about how much to risk, not where the edge is.</p>
         </div>
         <form method="post" action="/analytics/run">
@@ -130,6 +130,8 @@
                     <tr><td>Price range</td><td>{{ "%g" | format(cur.min_price * 100) }}&ndash;{{ "%g" | format(cur.max_price * 100) }}&cent;</td>
                         <td><strong>{% if sug %}{{ "%g" | format(sug.min_price * 100) }}&ndash;{{ "%g" | format(sug.max_price * 100) }}&cent;{% else %}--{% endif %}</strong></td></tr>
                     <tr><td>AIs that must answer</td><td>{{ cur.min_ais }}</td><td><strong>{{ sug.min_ais if sug else "--" }}</strong></td></tr>
+                    <tr><td>Minimum AI confidence</td><td>{{ "%g" | format((cur.min_confidence or 0) * 100) }}%</td>
+                        <td><strong>{{ ("%g" | format((sug.min_confidence or 0) * 100)) ~ "%" if sug else "--" }}</strong></td></tr>
                 </tbody>
             </table>
             </div>

@@ -64,6 +64,32 @@ def consensus_probability(
     return numerator / denominator
 
 
+def consensus_confidence(
+    predictions: list[LLMPrediction], weights: Optional[dict[str, float]] = None
+) -> Optional[float]:
+    """
+    How confident the AIs are, together: each one's own confidence (0-1)
+    averaged by its weight -- the same weights as consensus_probability(),
+    so an AI weighted 0 doesn't count and a heavily weighted one counts
+    more:
+
+        confidence = sum_i(c_i * w_i) / sum_i(w_i)
+
+    A separate signal from the probability: AIs can agree on 70% while each
+    saying they're barely sure. Betting.decide() can refuse a bet below a
+    minimum, however big the edge.
+
+    Returns None for no predictions, or if every weight is 0.
+    """
+    if not predictions:
+        return None
+    weights = weights or {}
+    total = sum(weights.get(p.llm_name, p.weight) for p in predictions)
+    if total <= 0:
+        return None
+    return sum(p.confidence * weights.get(p.llm_name, p.weight) for p in predictions) / total
+
+
 @dataclass
 class EVResult:
     """Result of an EV calculation."""

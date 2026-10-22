@@ -359,6 +359,10 @@ The side with the bigger edge gets a bet if all of these hold:
 - the edge is at least the minimum
 - the side is priced within the allowed range
 - enough AIs answered
+- the AIs are confident enough: their own confidence ratings, averaged by
+  your AI weights (an AI weighted 0 doesn't count), are at least the
+  **minimum AI confidence**. 0% turns this off; with it on, a game gets no
+  bet however big its edge if the AIs say they're unsure
 - the league is ticked
 - the game's part of the season (preseason, regular season or postseason,
   from the season dates on the Settings tab) is ticked. Preseason is
@@ -415,7 +419,9 @@ the page says when the filter has changed since.
 - **Optimizer** (button): fits your **AI weights** to minimize the AI odds'
   Brier score, pulled toward equal weights by an amount picked with
   leave-one-day-out cross-validation; then grid-searches the **betting
-  rules** that choose bets (minimum edge, price range, AIs required),
+  rules** that choose bets (minimum edge, price range, AIs required, and
+  minimum AI confidence -- tried at 0 and at levels taken from how
+  confident the AIs have actually been),
   replayed over the settled games with the suggested weights. Your stake,
   daily cap, leagues and seasons are kept. Rules are ranked by their return
   minus one standard error, so a few lucky bets can't win.

@@ -61,6 +61,7 @@ DEFAULTS = {
     "min_price": 0.10,
     "max_price": 0.90,
     "min_ais": 2,
+    "min_confidence": 0.0,  # the AIs' weighted average confidence (EVCalculator.consensus_confidence()), 0-1
     "leagues": list(Leagues.LEAGUES),
     "segments": list(SEGMENTS),
 }
@@ -125,12 +126,17 @@ def decide(
     league: Optional[str],
     config: dict,
     segment: Optional[str] = None,
+    ai_confidence: Optional[float] = None,
 ) -> tuple[Optional[dict], str]:
     """
     The bet the rules call for on one market, or None, plus a one-line reason.
 
     `segment` is the game's part of the season ("preseason", "regular",
     "postseason"; SeasonType.segment()); None (no game date) skips that rule.
+    `ai_confidence` is the AIs' weighted average confidence
+    (EVCalculator.consensus_confidence()); under the rules' min_confidence
+    there's no bet, however big the edge (None counts as under any minimum
+    above 0).
 
     Leaves out the daily cap and anything else that depends on bets already
     placed (see consider()), so the what-if backtest can reuse it as is.
@@ -144,6 +150,10 @@ def decide(
         return None, f"not betting on {segment} games"
     if ai_prob is None or ai_count < config["min_ais"]:
         return None, f"{ai_count} AI(s) answered, need {config['min_ais']}"
+    min_confidence = config.get("min_confidence") or 0.0
+    if min_confidence > 0 and (ai_confidence is None or ai_confidence < min_confidence):
+        shown = "unknown" if ai_confidence is None else f"{ai_confidence:.0%}"
+        return None, f"AI confidence {shown} is under {min_confidence:.0%}"
 
     sides = []
     for side, prob, price in (("yes", ai_prob, yes_ask), ("no", 1 - ai_prob, no_ask)):
@@ -246,7 +256,7 @@ def candidate(
     """
     import AIWeights
     import SeasonType
-    from EVCalculator import consensus_probability
+    from EVCalculator import consensus_confidence, consensus_probability
 
     config = bettor["config"]
     mode = config["mode"]
@@ -261,7 +271,8 @@ def candidate(
     weights = {p.llm_name: AIWeights.lookup(bettor["weights"], p.llm_name) for p in predictions}
     ai_prob = consensus_probability(predictions, weights)
     bet, reason = decide(ai_prob, len(predictions), prices.get("yes_ask"), prices.get("no_ask"), league, config,
-                         segment=SeasonType.segment_iso(game_date, league))
+                         segment=SeasonType.segment_iso(game_date, league),
+                         ai_confidence=consensus_confidence(predictions, weights))
     if bet is None:
         print(f"no bet for {bettor['username']} on {ticker}: {reason}")
         return None

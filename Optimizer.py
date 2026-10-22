@@ -19,7 +19,7 @@ AI weights
 
 Betting rules
     A grid search over the rules that decide *which* bets to take
-    (min_edge, min_price, max_price, min_ais), each replayed over the
+    (min_edge, min_price, max_price, min_ais, min_confidence), each replayed over the
     settled games exactly like the Betting tab's what-if table (the user's
     stake, daily cap, leagues and seasons, which are about how much risk to
     take, stay as they are). Rules are ranked by a lower confidence bound
@@ -226,8 +226,17 @@ def optimize_weights(games: list[dict], current: dict[str, float]) -> dict:
 # Betting rules
 # ---------------------------------------------------------------------------
 
+def confidence(preds: list[tuple], weights: dict[str, float]) -> Optional[float]:
+    """EVCalculator.consensus_confidence() on (llm, p, c) tuples: sum(c*w) / sum(w)."""
+    total = sum(weights.get(llm, 1.0) for llm, _, _ in preds)
+    if not preds or total <= 0:
+        return None
+    return sum(c * weights.get(llm, 1.0) for llm, _, c in preds) / total
+
+
 def _with_consensus(games: list[dict], weights: dict[str, float]) -> list[dict]:
-    return [{**g, "ai_prob": consensus(g["preds"], weights), "ai_count": len(g["preds"])} for g in games]
+    return [{**g, "ai_prob": consensus(g["preds"], weights), "ai_confidence": confidence(g["preds"], weights),
+             "ai_count": len(g["preds"])} for g in games]
 
 
 def simulate(games: list[dict], rules: dict) -> list[dict]:
@@ -241,7 +250,7 @@ def simulate(games: list[dict], rules: dict) -> list[dict]:
     for g in games:
         no_ask = None if g["yes_bid"] is None else 1 - g["yes_bid"]
         bet, _ = Betting.decide(g["ai_prob"], g["ai_count"], g["yes_ask"], no_ask, g["league"], rules,
-                                segment=g["segment"])
+                                segment=g["segment"], ai_confidence=g.get("ai_confidence"))
         if bet:
             bets.append({**bet, "game_date": g["game_date"], **Betting.result(bet, g["outcome"], g["tied"])})
     kept, _ = Betting.apply_daily_cap(bets, rules["max_daily_usd"])
@@ -286,15 +295,33 @@ def bootstrap_roi(bets: list[dict], samples: int = BOOTSTRAP_SAMPLES, seed: int 
     return rois[int(0.05 * samples)], rois[int(0.95 * samples) - 1]
 
 
-def candidates(base: dict, max_ais: int) -> list[dict]:
+CONFIDENCE_QUANTILES = [0.2, 0.4, 0.6, 0.8]
+
+
+def confidence_grid(games: list[dict]) -> list[float]:
+    """
+    Minimum-confidence values worth trying: none (0), plus the levels below
+    which 20/40/60/80% of these games' weighted AI confidence falls --
+    taken from the data, since how confident the AIs say they are varies a
+    lot (a fixed 50/60/70% grid could sit above every game). Whole percents.
+    """
+    values = sorted(g["ai_confidence"] for g in games if g.get("ai_confidence") is not None)
+    grid = {0.0}
+    for q in CONFIDENCE_QUANTILES if values else []:
+        grid.add(round(values[min(len(values) - 1, int(q * len(values)))], 2))
+    return sorted(grid)
+
+
+def candidates(base: dict, max_ais: int, confidences: Iterable[float] = (0.0,)) -> list[dict]:
     """Every grid combination, the user's other rules (stake, cap, leagues, seasons, mode) kept."""
     found = []
     for min_edge in GRID["min_edge"]:
         for min_price in GRID["min_price"]:
             for max_price in GRID["max_price"]:
                 for min_ais in range(1, max_ais + 1):
-                    found.append({**base, "min_edge": min_edge, "min_price": min_price,
-                                  "max_price": max_price, "min_ais": min_ais})
+                    for min_confidence in confidences:
+                        found.append({**base, "min_edge": min_edge, "min_price": min_price,
+                                      "max_price": max_price, "min_ais": min_ais, "min_confidence": min_confidence})
     return found
 
 
@@ -307,11 +334,11 @@ def best_rules(games: list[dict], base: dict, max_ais: int) -> Optional[tuple[di
     """(rules, their bets, their score) for the best-scoring grid point, or None if none places enough bets."""
     need = min_bets_for(games)
     best = None
-    for rules in candidates(base, max_ais):
+    for rules in candidates(base, max_ais, confidence_grid(games)):
         bets = simulate(games, rules)
         s = score(bets, need)
-        # Ties go to more bets, then the stricter edge.
-        key = None if s is None else (round(s, 9), len(bets), rules["min_edge"])
+        # Ties go to more bets, then the stricter edge, then the lower confidence bar (fewer rules).
+        key = None if s is None else (round(s, 9), len(bets), rules["min_edge"], -rules["min_confidence"])
         if key is not None and (best is None or key > best[0]):
             best = (key, rules, bets, s)
     return None if best is None else (best[1], best[2], best[3])
@@ -357,7 +384,7 @@ def optimize_rules(games: list[dict], weights: dict[str, float], current_rules: 
     if found:
         rules, bets, s = found
         result["suggested"] = {
-            "rules": {k: rules[k] for k in ("min_edge", "min_price", "max_price", "min_ais")},
+            "rules": {k: rules[k] for k in ("min_edge", "min_price", "max_price", "min_ais", "min_confidence")},
             **summary(bets), "interval": bootstrap_roi(bets), "score": s,
         }
     return result

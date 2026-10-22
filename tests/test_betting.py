@@ -78,8 +78,9 @@ class FeeTests(unittest.TestCase):
 
 
 class DecideTests(unittest.TestCase):
-    def decide(self, ai_prob=0.70, ai_count=3, yes_ask=0.60, no_ask=0.42, league="NBA", **rules):
-        return Betting.decide(ai_prob, ai_count, yes_ask, no_ask, league, {**RULES, **rules})
+    def decide(self, ai_prob=0.70, ai_count=3, yes_ask=0.60, no_ask=0.42, league="NBA", ai_confidence=0.8, **rules):
+        return Betting.decide(ai_prob, ai_count, yes_ask, no_ask, league, {**RULES, **rules},
+                              ai_confidence=ai_confidence)
 
     def test_bets_yes_when_the_ai_odds_beat_the_yes_ask(self):
         bet, _ = self.decide()
@@ -108,6 +109,16 @@ class DecideTests(unittest.TestCase):
 
     def test_only_listed_leagues(self):
         self.assertIsNone(self.decide(league="MLB")[0])
+
+    def test_no_bet_under_the_confidence_minimum_however_big_the_edge(self):
+        bet, reason = self.decide(ai_prob=0.90, min_confidence=0.60, ai_confidence=0.55)
+        self.assertIsNone(bet)
+        self.assertIn("AI confidence 55% is under 60%", reason)
+        self.assertIsNotNone(self.decide(ai_prob=0.90, min_confidence=0.60, ai_confidence=0.60)[0])
+
+    def test_a_zero_confidence_minimum_is_off(self):
+        self.assertIsNotNone(self.decide(min_confidence=0.0, ai_confidence=None)[0])
+        self.assertIsNone(self.decide(min_confidence=0.3, ai_confidence=None)[0])  # unknown never clears a minimum
 
     def test_a_missing_ask_rules_out_only_that_side(self):
         bet, _ = self.decide(ai_prob=0.30, yes_ask=None, no_ask=0.50)
@@ -250,6 +261,23 @@ class DailyRunBettingTests(DailyLogTestCase):
             conn.close()
         self.run_day(OCT4, TODAY_MARKETS[:2])
         self.assertEqual([b[2] for b in self.bets()], ["no"])
+
+    def test_too_little_ai_confidence_means_no_bet(self):
+        # LLMS say 80%, 60% and 50% confident: 63% averaged with equal weights.
+        self.set_rules(min_edge=0.02, min_confidence=0.65)
+        self.run_day(OCT4, TODAY_MARKETS[:2])
+        self.assertEqual(self.bets(), [])
+
+    def test_confidence_is_averaged_by_the_users_ai_weights(self):
+        # Tripling OpenAI's weight (it's 80% confident) lifts the average to 70%: over 65%, so a bet.
+        conn = Tracker.connect(self.db_path)
+        try:
+            Accounts.set_setting(conn, self.uid, "ai_weights", {"openai": 3, "claude": 1, "gemini": 1})
+        finally:
+            conn.close()
+        self.set_rules(min_edge=0.02, min_confidence=0.65)
+        self.run_day(OCT4, TODAY_MARKETS[:2])
+        self.assertEqual(len(self.bets()), 1)
 
     def test_the_daily_cap_goes_to_the_biggest_edge_not_the_first_game(self):
         # Two games, each about $5 with its fee. Denver's (logged first) YES edge
@@ -530,7 +558,7 @@ class BettingPageTests(BettingConfigTestCase):
         self.assertEqual(r.status_code, 303)
         self.assertEqual({k: self.rules()[k] for k in RULES}, {
             "mode": "paper", "min_edge": 0.075, "stake_usd": 10.0, "max_daily_usd": 100.0, "min_price": 0.15,
-            "max_price": 0.85, "min_ais": 3, "leagues": ["NBA", "NHL"],
+            "max_price": 0.85, "min_ais": 3, "min_confidence": 0.0, "leagues": ["NBA", "NHL"],
             "segments": ["regular", "postseason"]})
         self.assertIn("Rules saved.", self.client.get(r.headers["location"]).text)
 
@@ -615,6 +643,32 @@ class BettingPageTests(BettingConfigTestCase):
     def test_guests_cannot_preview(self):
         self.client.post("/guest")
         self.assertEqual(self.client.post("/betting/preview", data=self.valid_form()).status_code, 403)
+
+    def test_saving_a_confidence_minimum(self):
+        self.sign_in()
+        self.client.post("/betting/rules", data=self.valid_form(min_confidence="45"))
+        self.assertEqual(self.rules()["min_confidence"], 0.45)
+        self.assertIn('id="min_confidence"', self.client.get("/betting").text)
+        r = self.client.post("/betting/rules", data=self.valid_form(min_confidence="120"))
+        self.assertEqual(r.status_code, 400)
+
+    def test_the_preview_applies_the_confidence_minimum(self):
+        self.sign_in()
+        base = self.valid_form(min_edge="0", min_ais="2", segments=["preseason"])  # GAMES have two AIs each
+        open_rows = self.client.post("/betting/preview", data={**base, "min_confidence": "0"}).json()["rows_html"]
+        # GAMES are seeded at 100% confidence, so even a 99% minimum lets them through...
+        self.assertEqual(self.client.post("/betting/preview", data={**base, "min_confidence": "99"}).json()["rows_html"],
+                         open_rows)
+        # ...and the rows differ once nothing can clear it.
+        conn = Tracker.connect(self.db_path)
+        try:
+            conn.execute("UPDATE predictions SET confidence = 0.3")
+            conn.commit()
+        finally:
+            conn.close()
+        strict = self.client.post("/betting/preview", data={**base, "min_confidence": "50"}).json()["rows_html"]
+        self.assertNotEqual(strict, open_rows)
+        self.assertNotIn("<td>1</td>", strict)
 
     def test_invalid_rules_save_nothing(self):
         self.sign_in()

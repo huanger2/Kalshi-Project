@@ -660,6 +660,7 @@ def save_betting_rules(
     min_price: str = Form(""),
     max_price: str = Form(""),
     min_ais: str = Form(""),
+    min_confidence: str = Form(""),
     leagues: list[str] = Form([]),
     segments: list[str] = Form([]),
     confirm_live: str = Form(""),
@@ -670,8 +671,8 @@ def save_betting_rules(
 ):
     user = _require_user(request)
     form = {"mode": mode, "min_edge": min_edge, "stake_usd": stake_usd, "max_daily_usd": max_daily_usd,
-            "min_price": min_price, "max_price": max_price, "min_ais": min_ais, "leagues": leagues,
-            "segments": segments, "confirm_live": confirm_live}
+            "min_price": min_price, "max_price": max_price, "min_ais": min_ais, "min_confidence": min_confidence,
+            "leagues": leagues, "segments": segments, "confirm_live": confirm_live}
     for key, value in (("openai", weight_openai), ("claude", weight_claude), ("gemini", weight_gemini)):
         if value is not None:
             form[f"weight::{key}"] = value

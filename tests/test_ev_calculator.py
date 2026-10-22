@@ -147,5 +147,19 @@ class ConsensusProbabilityTests(unittest.TestCase):
         self.assertAlmostEqual(consensus_probability(p), 2.0 / 3)
 
 
+class ConsensusConfidenceTests(unittest.TestCase):
+    def test_confidence_averaged_by_weight(self):
+        from EVCalculator import LLMPrediction, consensus_confidence
+        preds = [LLMPrediction("A", 0.7, 0.8), LLMPrediction("B", 0.6, 0.2)]
+        self.assertAlmostEqual(consensus_confidence(preds), 0.5)
+        self.assertAlmostEqual(consensus_confidence(preds, {"A": 3.0, "B": 1.0}), 0.65)
+        self.assertAlmostEqual(consensus_confidence(preds, {"A": 1.0, "B": 0.0}), 0.8)  # weight 0: left out
+
+    def test_nothing_to_average(self):
+        from EVCalculator import LLMPrediction, consensus_confidence
+        self.assertIsNone(consensus_confidence([]))
+        self.assertIsNone(consensus_confidence([LLMPrediction("A", 0.7, 0.8)], {"A": 0.0}))
+
+
 if __name__ == "__main__":
     unittest.main()
