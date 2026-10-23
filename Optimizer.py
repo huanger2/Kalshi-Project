@@ -432,6 +432,7 @@ def edge_returns(games: list[dict], weights: dict[str, float]) -> list[dict]:
         ai = consensus(g["preds"], weights)
         if ai is None:
             continue
+        sure = confidence(g["preds"], weights)
         sides = []
         if g["yes_ask"] is not None:
             sides.append(("yes", ai - g["yes_ask"], g["yes_ask"]))
@@ -446,13 +447,55 @@ def edge_returns(games: list[dict], weights: dict[str, float]) -> list[dict]:
         bet = {"side": side, "count": 1, "cost": price, "fee": fee}
         res = Betting.result(bet, g["outcome"], g["tied"])
         label = next(lbl for lo, hi, lbl in EDGE_BUCKETS if lo <= edge < hi or (hi == 1.0 and edge >= hi))
-        rows[label].append({**res, "cost": price, "fee": fee})
+        rows[label].append({**res, "cost": price, "fee": fee, "ai_confidence": sure, "edge": edge})
+    return _bucket_rows(rows, [label for _, _, label in EDGE_BUCKETS])
+
+
+def _bucket_rows(rows: dict[str, list[dict]], order: list[str]) -> list[dict]:
+    """A summary() per non-empty bucket, plus its average AI confidence and edge."""
     out = []
-    for _, _, label in EDGE_BUCKETS:
+    for label in order:
         bets = rows[label]
         if bets:
-            out.append({"label": label, **summary(bets)})
+            sure = [b["ai_confidence"] for b in bets if b["ai_confidence"] is not None]
+            out.append({"label": label, **summary(bets),
+                        "ai_confidence": sum(sure) / len(sure) if sure else None,
+                        "edge": sum(b["edge"] for b in bets) / len(bets)})
     return out
+
+
+CONFIDENCE_BUCKETS = [(0.0, 0.3, "Under 30%"), (0.3, 0.4, "30-40%"), (0.4, 0.5, "40-50%"),
+                      (0.5, 0.6, "50-60%"), (0.6, 1.01, "60%+")]
+
+
+def confidence_returns(games: list[dict], weights: dict[str, float]) -> list[dict]:
+    """
+    Does confidence pay? The same one-contract replay as edge_returns(),
+    grouped by the AIs' weighted confidence instead -- if the AIs know when
+    they know, ROI should rise with it.
+    """
+    by_edge = {}
+    for g in games:
+        ai = consensus(g["preds"], weights)
+        sure = confidence(g["preds"], weights)
+        if ai is None or sure is None:
+            continue
+        sides = []
+        if g["yes_ask"] is not None:
+            sides.append(("yes", ai - g["yes_ask"], g["yes_ask"]))
+        if g["yes_bid"] is not None:
+            sides.append(("no", (1 - ai) - (1 - g["yes_bid"]), 1 - g["yes_bid"]))
+        if not sides:
+            continue
+        side, edge, price = max(sides, key=lambda s: s[1])
+        if not 0 < price < 1:
+            continue
+        fee = Betting.fee(1, price)
+        res = Betting.result({"side": side, "count": 1, "cost": price, "fee": fee}, g["outcome"], g["tied"])
+        label = next(lbl for lo, hi, lbl in CONFIDENCE_BUCKETS if lo <= sure < hi)
+        by_edge.setdefault(label, []).append({**res, "cost": price, "fee": fee, "ai_confidence": sure, "edge": edge})
+    order = [label for _, _, label in CONFIDENCE_BUCKETS]
+    return _bucket_rows({label: by_edge.get(label, []) for label in order}, order)
 
 
 def source_scores(games: list[dict], weights: dict[str, float]) -> list[dict]:

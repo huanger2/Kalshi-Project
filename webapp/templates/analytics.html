@@ -229,10 +229,29 @@
     {% if not a.edges %}<p class="empty">No settled games yet.</p>{% else %}
     <div class="table-scroll">
     <table>
-        <thead><tr><th>Edge</th><th>Games</th><th>Win rate</th><th>P&amp;L</th><th>ROI</th></tr></thead>
+        <thead><tr><th>Edge</th><th>Games</th><th>AI confidence</th><th>Win rate</th><th>P&amp;L</th><th>ROI</th></tr></thead>
         <tbody>
             {% for e in a.edges %}
-            <tr><td>{{ e.label }}</td><td>{{ e.bets }}</td><td>{{ pct(e.win_rate, 0) }}</td><td>{{ signed(e.pnl) }}</td><td>{{ pct(e.roi) }}</td></tr>
+            <tr><td>{{ e.label }}</td><td>{{ e.bets }}</td><td class="confidence">{{ pct(e.ai_confidence, 0) }}</td>
+                <td>{{ pct(e.win_rate, 0) }}</td><td>{{ signed(e.pnl) }}</td><td>{{ pct(e.roi) }}</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    </div>
+    {% endif %}
+
+    <h2 class="section-gap">Does confidence pay?</h2>
+    <p class="subtitle">The same replay, grouped by how confident the AIs said they were (their own ratings, averaged by
+        your AI weights). If they know when they know, ROI should rise down the table -- and the minimum AI confidence
+        rule on the Betting tab is worth setting.</p>
+    {% if not a.confidences %}<p class="empty">No settled games yet.</p>{% else %}
+    <div class="table-scroll">
+    <table>
+        <thead><tr><th>AI confidence</th><th>Games</th><th>Avg edge</th><th>Win rate</th><th>P&amp;L</th><th>ROI</th></tr></thead>
+        <tbody>
+            {% for e in a.confidences %}
+            <tr><td>{{ e.label }}</td><td>{{ e.bets }}</td><td>{{ "%+.1f" | format(e.edge * 100) }} pts</td>
+                <td>{{ pct(e.win_rate, 0) }}</td><td>{{ signed(e.pnl) }}</td><td>{{ pct(e.roi) }}</td></tr>
             {% endfor %}
         </tbody>
     </table>

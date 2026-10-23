@@ -100,6 +100,7 @@ def view(conn: sqlite3.Connection, user: dict, segments: Optional[list[str]] = N
         "sources": Optimizer.source_scores(games, weights),
         "calibration": Optimizer.calibration(games, weights),
         "edges": Optimizer.edge_returns(games, weights),
+        "confidences": Optimizer.confidence_returns(games, weights),
         "run": run,
         "stale": bool(run) and run_segments == segments and run.get("games") != len(games),
         "verdicts": _verdicts(run) if run else None,

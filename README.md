@@ -178,6 +178,11 @@ whatever consumes this next.
 
 ### AI odds (consensus probability)
 
+Next to the AI odds everywhere (markets tables, each game's page, your
+bets) is the **AI confidence**: each AI's own confidence rating, averaged
+by the same AI weights, so you can see how sure the AIs were, not just
+what they said.
+
 The markets table's "AI odds" column combines the 3 AIs' predictions for a
 game into one number -- not a bare average, but each one weighted by its own
 confidence and its AI's weight, same `p_i` / `c_i` / `w_i` vocabulary as
@@ -413,6 +418,9 @@ the page says when the filter has changed since.
   against how often it won, for the AI odds and for Kalshi's price.
 - **Who predicts best**: the Brier score of each AI alone, your weighted AI
   odds, and Kalshi's price.
+- **Does confidence pay?**: the same replay grouped by the AIs' weighted
+  confidence, to see whether the minimum AI confidence rule is worth
+  setting.
 - **Does a bigger edge pay?**: every settled game's better side, one
   contract at its ask with fees, grouped by edge. If the AI odds carry real
   information, ROI rises with the edge.

@@ -196,13 +196,18 @@ def list_season_years(conn: sqlite3.Connection, league: Optional[str] = None) ->
     return [r[0] for r in rows]
 
 
-def get_game(conn: sqlite3.Connection, ticker: str) -> Optional[dict]:
+def get_game(conn: sqlite3.Connection, ticker: str, weights: Optional[dict[str, float]] = None) -> Optional[dict]:
     """
     Full detail for one game: its Kalshi odds/outcome, plus every AI's
-    prediction next to the market's own price (the "AI vs Kalshi" view).
+    prediction next to the market's own price (the "AI vs Kalshi" view),
+    and the combined AI odds and AI confidence with `weights` (the
+    viewer's; None: the site defaults).
 
     Returns None if no prediction was ever recorded for this ticker.
     """
+    import AIWeights
+    from EVCalculator import LLMPrediction, consensus_confidence, consensus_probability
+
     row = conn.execute(
         "SELECT ticker, event_ticker, league, game_date, team, opponent, yes_bid, yes_ask, "
         "       market_prob, outcome, tied, settled_at, segment(game_date, league), season_year(game_date, league) "
@@ -219,9 +224,12 @@ def get_game(conn: sqlite3.Connection, ticker: str) -> Optional[dict]:
         (ticker,),
     ).fetchall()
 
+    combined = [LLMPrediction(llm, p, c, weight=AIWeights.lookup(weights, llm)) for llm, _, p, c in predictions]
     return {
         "ticker": ticker,
         "event_ticker": event_ticker,
+        "ai_prob": consensus_probability(combined),
+        "ai_confidence": consensus_confidence(combined),
         "league": league,
         "game_date": game_date,
         "team": team,
@@ -240,6 +248,7 @@ def get_game(conn: sqlite3.Connection, ticker: str) -> Optional[dict]:
                 "model": model,
                 "predicted_prob": predicted_prob,
                 "confidence": confidence,
+                "weight": AIWeights.lookup(weights, llm),
                 # Positive: this AI thought YES (the named team) was more
                 # likely than the market priced it; negative: less likely.
                 "edge": predicted_prob - market_prob,

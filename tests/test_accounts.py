@@ -350,6 +350,32 @@ class OwnSettingsTests(AccountsPageTestCase):
         with self.db() as conn:
             self.assertIsNone(Accounts.get_setting(conn, self.user["id"], "ai_weights"))
 
+    def test_ai_confidence_shows_beside_the_ai_odds_with_the_users_weights(self):
+        # OpenAI says 80% at confidence 1.0, Claude 40% at 1.0: confidence 100% either way --
+        # so record a game where they differ.
+        conn = Tracker.connect(self.db_path)
+        try:
+            Tracker.record_predictions(conn, market("KXNBAGAME-26OCT21LALBOS-LAL", "Los Angeles L"), 0.5,
+                                       [LLMPrediction("OpenAI", 0.70, 0.9), LLMPrediction("Claude", 0.60, 0.3)])
+        finally:
+            conn.close()
+        self.sign_in("pat", "pat-password")
+        flat = lambda html: html.replace(" ", "").replace("\n", "")
+        self.assertIn("AIconfidence", flat(self.client.get("/").text))
+        self.assertIn('class="confidence">60%<', flat(self.client.get("/").text))  # (0.9 + 0.3) / 2
+        table = self.client.get("/").text.split('<table class="games">')[1].split("</table>")[0]
+        header = table.split("</thead>")[0]
+        header_cells = header.count("<th>") + header.count("<th ")  # (not <thead>)
+        for row in table.split("<tbody>")[1].split("</tr>")[:-1]:
+            self.assertEqual(row.count("<td"), header_cells)  # every row lines up with the headers
+        page = self.client.get("/markets/KXNBAGAME-26OCT21LALBOS-LAL").text
+        self.assertIn("AI confidence", page)
+        self.assertIn(">60%<", flat(page))
+        with self.db() as conn:
+            Accounts.set_setting(conn, self.user["id"], "ai_weights", {"openai": 1, "claude": 0, "gemini": 1})
+        self.assertIn('class="confidence">90%<', flat(self.client.get("/").text))  # Claude weighted out
+        self.assertIn(">90%<", flat(self.client.get("/markets/KXNBAGAME-26OCT21LALBOS-LAL").text))
+
     def test_saving_checking_and_removing_a_kalshi_key(self):
         self.sign_in("pat", "pat-password")
         r = self.client.post("/settings/kalshi/demo", data={"key_id": "demo-key", "private_key": _pem(self.key)},

@@ -270,13 +270,13 @@ def candidate(
     league = Leagues.league_for_ticker(ticker)
     weights = {p.llm_name: AIWeights.lookup(bettor["weights"], p.llm_name) for p in predictions}
     ai_prob = consensus_probability(predictions, weights)
+    ai_confidence = consensus_confidence(predictions, weights)
     bet, reason = decide(ai_prob, len(predictions), prices.get("yes_ask"), prices.get("no_ask"), league, config,
-                         segment=SeasonType.segment_iso(game_date, league),
-                         ai_confidence=consensus_confidence(predictions, weights))
+                         segment=SeasonType.segment_iso(game_date, league), ai_confidence=ai_confidence)
     if bet is None:
         print(f"no bet for {bettor['username']} on {ticker}: {reason}")
         return None
-    return {**bet, "user_id": bettor["user_id"], "mode": mode, "ticker": ticker,
+    return {**bet, "ai_confidence": ai_confidence, "user_id": bettor["user_id"], "mode": mode, "ticker": ticker,
             "event_ticker": market.get("event_ticker"), "league": league, "game_date": game_date,
             "team": market.get("yes_sub_title"), "opponent": opponent, "reason": reason}
 
@@ -302,11 +302,12 @@ def place(conn: sqlite3.Connection, bettor: dict, candidates: list[dict]) -> lis
                 continue
         conn.execute(
             "INSERT INTO bets (created_at, user_id, mode, ticker, event_ticker, league, game_date, team, opponent, "
-            " side, price, count, cost, fee, ai_prob, edge, order_id) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " side, price, count, cost, fee, ai_prob, edge, order_id, ai_confidence) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (datetime.datetime.now().isoformat(timespec="seconds"), bet["user_id"], bet["mode"], bet["ticker"],
              bet["event_ticker"], bet["league"], bet["game_date"], bet["team"], bet["opponent"], bet["side"],
-             bet["price"], bet["count"], bet["cost"], bet["fee"], bet["ai_prob"], bet["edge"], bet.get("order_id")),
+             bet["price"], bet["count"], bet["cost"], bet["fee"], bet["ai_prob"], bet["edge"], bet.get("order_id"),
+             bet.get("ai_confidence")),
         )
         # One commit per bet: a real order already went through, so a crash
         # on a later one mustn't lose the record of this one.

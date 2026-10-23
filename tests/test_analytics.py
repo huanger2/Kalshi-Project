@@ -132,6 +132,13 @@ class ConfidenceRuleTests(unittest.TestCase):
         result = Optimizer.optimize_rules(self.confidence_games(), {}, RULES)
         self.assertGreater(result["suggested"]["rules"]["min_confidence"], 0.3)
 
+    def test_returns_grouped_by_confidence(self):
+        rows = {r["label"]: r for r in Optimizer.confidence_returns(self.confidence_games(), {})}
+        self.assertEqual(set(rows), {"60%+", "30-40%"})
+        self.assertGreater(rows["60%+"]["roi"], 0)   # the confident calls won
+        self.assertLess(rows["30-40%"]["roi"], 0)    # the unsure ones lost
+        self.assertAlmostEqual(rows["60%+"]["ai_confidence"], 0.9)
+
     def test_weights_shift_the_confidence(self):
         preds = [("a", 0.6, 0.9), ("b", 0.6, 0.1)]
         self.assertAlmostEqual(Optimizer.confidence(preds, {}), 0.5)
@@ -216,6 +223,13 @@ class AnalyticsPageTests(unittest.TestCase):
         self.assertIn('href="/analytics" class="active"', page)
         self.assertIn("Needs at least", page)
         self.assertEqual(self.client.post("/analytics/run").status_code, 400)
+
+    def test_the_page_shows_confidence_tables(self):
+        _seed_games(self.db_path, edge_games())
+        self.sign_in()
+        page = self.client.get("/analytics").text
+        self.assertIn("Does confidence pay?", page)
+        self.assertIn("<th>AI confidence</th>", page)
 
     def test_run_then_apply_rules(self):
         _seed_games(self.db_path, edge_games())

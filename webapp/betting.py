@@ -30,21 +30,38 @@ EDGE_BUCKETS = [(0.0, 0.05, "Under 5 pts"), (0.05, 0.10, "5-10 pts"), (0.10, 0.1
                 (0.15, float("inf"), "15+ pts")]
 
 
+def _confidence_from_predictions(conn: sqlite3.Connection, ticker: str, weights: dict) -> Optional[float]:
+    """For a bet placed before confidence was recorded: its game's AI confidence with the user's weights now."""
+    from EVCalculator import LLMPrediction, consensus_confidence
+
+    rows = conn.execute("SELECT llm, predicted_prob, confidence FROM predictions WHERE ticker = ?", (ticker,)).fetchall()
+    return consensus_confidence([LLMPrediction(llm, p, c, weight=AIWeights.lookup(weights, llm)) for llm, p, c in rows])
+
+
 def list_bets(conn: sqlite3.Connection, user_id: int, mode: Optional[str] = None) -> list[dict]:
-    """A user's bets (or their `mode` bets), newest game first, with each result (status/payout/pnl) filled in."""
+    """
+    A user's bets (or their `mode` bets), newest game first, with each
+    result (status/payout/pnl) filled in, and the AI confidence it was
+    placed at (worked out from its predictions for bets from before that
+    was recorded).
+    """
     rows = conn.execute(
         "SELECT b.id, b.created_at, b.mode, b.ticker, b.league, b.game_date, b.team, b.opponent, b.side, "
-        "       b.price, b.count, b.cost, b.fee, b.ai_prob, b.edge, "
+        "       b.price, b.count, b.cost, b.fee, b.ai_prob, b.edge, b.ai_confidence, "
         "       (SELECT MAX(outcome) FROM predictions p WHERE p.ticker = b.ticker), "
         "       (SELECT MAX(tied) FROM predictions p WHERE p.ticker = b.ticker) "
         "FROM bets b WHERE b.user_id = ? AND (? IS NULL OR b.mode = ?) ORDER BY b.game_date DESC, b.id DESC",
         (user_id, mode, mode),
     ).fetchall()
     keys = ["id", "created_at", "mode", "ticker", "league", "game_date", "team", "opponent", "side",
-            "price", "count", "cost", "fee", "ai_prob", "edge"]
+            "price", "count", "cost", "fee", "ai_prob", "edge", "ai_confidence"]
     bets = []
+    weights = None
     for row in rows:
         bet = dict(zip(keys, row[:-2]))
+        if bet["ai_confidence"] is None:
+            weights = weights if weights is not None else AIWeights.for_user(conn, user_id)
+            bet["ai_confidence"] = _confidence_from_predictions(conn, bet["ticker"], weights)
         bet.update(Betting.result(bet, row[-2], bool(row[-1])))
         bet["backing"] = bet["team"] if bet["side"] == "yes" else bet["opponent"]
         bets.append(bet)

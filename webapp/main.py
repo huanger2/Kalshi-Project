@@ -342,7 +342,7 @@ def daily_run_progress(request: Request):
 
 @app.get("/markets/{ticker}", response_class=HTMLResponse)
 def market_detail_page(request: Request, ticker: str, conn: sqlite3.Connection = Depends(get_db)):
-    game = queries.get_game(conn, ticker)
+    game = queries.get_game(conn, ticker, weights=_viewer_weights(request, conn))
     if game is None:
         raise HTTPException(status_code=404, detail=f"No tracked predictions for {ticker!r}")
     return templates.TemplateResponse(

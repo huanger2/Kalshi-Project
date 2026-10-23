@@ -253,7 +253,7 @@
     {% else %}
     <div class="table-scroll">
     <table>
-        <thead><tr><th>Date</th><th>Game</th><th>Backing</th><th>Price</th><th>AI odds</th><th>Edge</th>
+        <thead><tr><th>Date</th><th>Game</th><th>Backing</th><th>Price</th><th>AI odds</th><th>AI confidence</th><th>Edge</th>
             <th>Cost</th><th>Result</th><th>P&amp;L</th></tr></thead>
         <tbody>
             {% for bet in b.bets %}
@@ -264,6 +264,7 @@
                 <td>{{ bet.backing or "?" }} <span class="muted">({{ bet.side | upper }})</span></td>
                 <td>{{ bet.count }} &times; {{ "%.0f" | format(bet.price * 100) }}&cent;</td>
                 <td>{{ pct(bet.ai_prob if bet.side == "yes" else 1 - bet.ai_prob, 0) }}</td>
+                <td class="confidence">{{ pct(bet.ai_confidence, 0) }}</td>
                 <td>{{ "+" if bet.edge > 0 }}{{ pct(bet.edge) }}</td>
                 <td>{{ money(bet.cost + bet.fee) }}</td>
                 <td><span class="pill {{ {'won': 'won', 'lost': 'lost', 'tie': 'neutral'}.get(bet.status, 'pending') }}">{{ bet.status | capitalize }}</span></td>

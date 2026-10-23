@@ -327,6 +327,9 @@ body {
 .apply-both .note { margin: 0; }
 th.group { text-align: center; border-bottom: 1px solid var(--border); }
 .section-gap { margin-top: 1.5rem; }
+/* AI confidence sits beside AI odds everywhere; give it the same weight. */
+td.confidence { font-weight: 600; font-variant-numeric: tabular-nums; }
+.facts dd.headline-figure { font-size: 1.15rem; }
 .form-subhead { margin: 1.4rem 0 0.2rem; font-size: 0.95rem; }
 .form-subhead + .note { margin-top: 0.2rem; margin-bottom: 0.6rem; }
 .form-actions { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; margin-top: 1rem; }

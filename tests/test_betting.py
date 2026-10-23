@@ -262,6 +262,15 @@ class DailyRunBettingTests(DailyLogTestCase):
         self.run_day(OCT4, TODAY_MARKETS[:2])
         self.assertEqual([b[2] for b in self.bets()], ["no"])
 
+    def test_a_bet_records_the_ai_confidence_it_was_placed_at(self):
+        self.run_day(OCT4, TODAY_MARKETS[:2])
+        conn = Tracker.connect(self.db_path)
+        try:
+            (confidence,) = conn.execute("SELECT ai_confidence FROM bets").fetchone()
+        finally:
+            conn.close()
+        self.assertAlmostEqual(confidence, (0.8 + 0.6 + 0.5) / 3)
+
     def test_too_little_ai_confidence_means_no_bet(self):
         # LLMS say 80%, 60% and 50% confident: 63% averaged with equal weights.
         self.set_rules(min_edge=0.02, min_confidence=0.65)
@@ -463,6 +472,10 @@ class BettingViewTests(BettingConfigTestCase):
         statuses = {b["ticker"][-3:]: b["status"] for b in betting.list_bets(self.conn, self.uid)}
         self.assertEqual(statuses, {"AAA": "won", "CCC": "lost", "GGG": "pending"})
 
+    def test_older_bets_get_their_confidence_from_the_predictions(self):
+        # _seed's bets have no recorded confidence; GAMES' predictions are all 100% confident.
+        self.assertEqual({b["ai_confidence"] for b in betting.list_bets(self.conn, self.uid)}, {1.0})
+
     def test_only_the_users_own_bets(self):
         other = Accounts.create_user(self.conn, "other", "password1")["id"]
         self.assertEqual(betting.list_bets(self.conn, other), [])
@@ -547,6 +560,7 @@ class BettingPageTests(BettingConfigTestCase):
         self.sign_in()
         page = self.client.get("/betting")
         self.assertEqual(page.status_code, 200)
+        self.assertIn("<th>AI confidence</th>", page.text)
         for text in ("Paper betting", "What if?", "Breakdowns", "Home vs Away", 'value="5"', "Save rules",
                      'name="segments" value="preseason" checked'):
             self.assertIn(text, page.text)

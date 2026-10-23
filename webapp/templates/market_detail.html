@@ -22,6 +22,10 @@
         </dd>
         <dt>Kalshi implied win %</dt>
         <dd>{{ (game.market_prob * 100) | round | int }}%</dd>
+        <dt>AI odds</dt>
+        <dd class="headline-figure">{% if game.ai_prob is none %}n/a{% else %}{{ (game.ai_prob * 100) | round | int }}%{% endif %}</dd>
+        <dt>AI confidence</dt>
+        <dd class="headline-figure">{% if game.ai_confidence is none %}n/a{% else %}{{ (game.ai_confidence * 100) | round | int }}%{% endif %}</dd>
         <dt>Season</dt>
         <dd>{{ game.season_year or "?" }}</dd>
         <dt>Part of season</dt>
@@ -51,6 +55,7 @@
                 <th>Model</th>
                 <th>Predicted win %</th>
                 <th>Confidence</th>
+                <th>{{ "Your weight" if request.state.user else "Weight" }}</th>
                 <th>Edge vs market</th>
             </tr>
         </thead>
@@ -61,6 +66,7 @@
                 <td class="model">{{ p.model or "?" }}</td>
                 <td>{{ (p.predicted_prob * 100) | round | int }}%</td>
                 <td>{{ (p.confidence * 100) | round | int }}%</td>
+                <td class="muted">{{ "%g" | format(p.weight) }}</td>
                 <td class="{% if p.edge > 0 %}edge-up{% elif p.edge < 0 %}edge-down{% endif %}">
                     {{ "%+.0f" | format(p.edge * 100) }}pp
                 </td>

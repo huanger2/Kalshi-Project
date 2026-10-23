@@ -89,6 +89,7 @@
                 <th>AIs</th>
                 <th>Kalshi odds</th>
                 <th>AI odds</th>
+                <th title="The AIs' own confidence, averaged by your AI weights">AI confidence</th>
                 <th>Result</th>
             </tr>
         </thead>
@@ -106,6 +107,7 @@
                 <td class="{% if g.ai_correct == true %}odds-correct{% elif g.ai_correct == false %}odds-wrong{% endif %}">
                     {% if g.ai_prob is none %}n/a{% else %}{{ (g.ai_prob * 100) | round | int }}%{% endif %}
                 </td>
+                <td class="confidence">{% if g.ai_confidence is none %}n/a{% else %}{{ (g.ai_confidence * 100) | round | int }}%{% endif %}</td>
                 <td>
                     {% if g.outcome is none %}
                         <span class="pill pending">pending</span>
