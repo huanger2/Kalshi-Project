@@ -102,8 +102,8 @@
 <div class="panel-stack">
 <section class="panel" id="rules">
     <h2>Rules</h2>
-    <p class="subtitle">Edge is the AI odds for a side minus what one contract on that side costs (its ask), in
-        points. Each game's better side is bet if its edge clears the minimum; when more games qualify than
+    <p class="subtitle">Edge is the odds you bet on (fair odds, or the raw AI odds) for a side minus what one
+        contract on that side costs (its ask), in points. Each game's better side is bet if its edge clears the minimum; when more games qualify than
         the daily cap covers, the biggest edges get the money. Changes apply from the next daily run; the
         <a href="#backtest">What if?</a> numbers follow your edits (and your <a href="#weights">AI weights</a>) as you
         type, before you save.</p>
@@ -130,6 +130,22 @@
             <label class="checkbox"><input type="checkbox" name="confirm_live" value="yes">
                 Live bets spend real money (needed to switch to Live)</label>
             {% endif %}
+            <label for="odds_model">Odds to bet on</label>
+            <div>
+                <select id="odds_model" name="odds_model" class="settings-select">
+                    <option value="fair" {% if c.odds_model == "fair" %}selected{% endif %}>Fair odds: Kalshi's price, moved by the AIs' proven skill (recommended)</option>
+                    <option value="ai" {% if c.odds_model == "ai" %}selected{% endif %}>Raw AI odds (lean heavily toward underdogs)</option>
+                </select>
+                {% set f = b.fair %}
+                <span class="muted default-hint">
+                    {% if f.trusts %}The model trusts the AIs' surprise &times;{{ "%.2f" | format(f.beta) }}{% if f.gamma %}
+                        (+{{ "%.2f" | format(f.gamma) }} per unit of confidence){% endif %}, learned from {{ f.games }} settled games.
+                    {% elif f.games < f.min_games %}Fair odds equal Kalshi's price until {{ f.min_games }} games have settled
+                        ({{ f.games }} so far), so no bets until then.
+                    {% else %}On {{ f.games }} settled games the AIs haven't beaten Kalshi on held-out days, so fair odds
+                        equal Kalshi's price and no bets are placed. That changes once they show skill.{% endif %}
+                </span>
+            </div>
             <label for="min_edge">Minimum edge (points)</label>
             <input id="min_edge" name="min_edge" type="number" step="0.5" min="0" max="50" value="{{ '%g' | format(c.min_edge * 100) }}" required>
             <label for="stake_usd">Dollars per bet</label>
@@ -263,7 +279,8 @@
     {% else %}
     <div class="table-scroll">
     <table>
-        <thead><tr><th>Date</th><th>Game</th><th>Backing</th><th>Price</th><th>AI odds</th><th>AI confidence</th><th>Edge</th>
+        <thead><tr><th>Date</th><th>Game</th><th>Backing</th><th>Price</th><th>AI odds</th><th>AI confidence</th>
+            <th title="The probability the bet was decided on">Fair odds</th><th>Edge</th>
             <th>Cost</th><th>Result</th><th>P&amp;L</th></tr></thead>
         <tbody>
             {% for bet in b.bets %}
@@ -275,6 +292,7 @@
                 <td>{{ bet.count }} &times; {{ "%.0f" | format(bet.price * 100) }}&cent;</td>
                 <td>{{ pct(bet.ai_prob if bet.side == "yes" else 1 - bet.ai_prob, 0) }}</td>
                 <td class="confidence">{{ pct(bet.ai_confidence, 0) }}</td>
+                <td>{% if bet.model_prob is none %}<span class="muted">&mdash;</span>{% else %}{{ pct(bet.model_prob if bet.side == "yes" else 1 - bet.model_prob, 0) }}{% endif %}</td>
                 <td>{{ "+" if bet.edge > 0 }}{{ pct(bet.edge) }}</td>
                 <td>{{ money(bet.cost + bet.fee) }}</td>
                 <td><span class="pill {{ {'won': 'won', 'lost': 'lost', 'tie': 'neutral'}.get(bet.status, 'pending') }}">{{ bet.status | capitalize }}</span></td>

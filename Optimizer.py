@@ -364,13 +364,17 @@ def walk_forward(games: list[dict], base: dict, max_ais: int, min_train_days: in
     return {"days": tested, "tuned": summary(tuned), "current": summary(current)}
 
 
-def optimize_rules(games: list[dict], weights: dict[str, float], current_rules: dict) -> dict:
+def optimize_rules(games: list[dict], weights: dict[str, float], current_rules: dict,
+                   fair: Optional[dict] = None) -> dict:
     """
     The suggested rules (with `weights` making the AI odds), their replayed
     results and a bootstrap interval, the current rules' results on the
     same games, and the walk-forward check.
     """
     with_ai = _with_consensus(games, weights)
+    if fair is not None and current_rules.get("odds_model", "fair") == "fair":
+        # Bet on walk-forward fair odds ({ticker: prob}, FairOdds.walk_forward()), as the daily run would.
+        with_ai = [{**g, "ai_prob": fair.get(g["ticker"])} for g in with_ai]
     max_ais = max((len(g["preds"]) for g in games), default=1)
     found = best_rules(with_ai, current_rules, max_ais)
     current_bets = simulate(with_ai, current_rules)

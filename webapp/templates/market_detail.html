@@ -24,6 +24,8 @@
         <dd>{{ (game.market_prob * 100) | round | int }}%</dd>
         <dt>AI odds</dt>
         <dd class="headline-figure">{% if game.ai_prob is none %}n/a{% else %}{{ (game.ai_prob * 100) | round | int }}%{% endif %}</dd>
+        <dt>Fair odds</dt>
+        <dd class="headline-figure" title="Kalshi's price, moved only as far as the AIs have shown skill">{% if game.fair_prob is none %}n/a{% else %}{{ (game.fair_prob * 100) | round | int }}%{% endif %}</dd>
         <dt>AI confidence</dt>
         <dd class="headline-figure">{% if game.ai_confidence is none %}n/a{% else %}{{ (game.ai_confidence * 100) | round | int }}%{% endif %}</dd>
         <dt>Season</dt>

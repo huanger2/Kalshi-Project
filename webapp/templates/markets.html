@@ -90,6 +90,7 @@
                 <th>Kalshi odds</th>
                 <th>AI odds</th>
                 <th title="The AIs' own confidence, averaged by your AI weights">AI confidence</th>
+                <th title="Kalshi's price, moved only as far as the AIs have shown skill -- what bets are decided on">Fair odds</th>
                 <th>Result</th>
             </tr>
         </thead>
@@ -108,6 +109,7 @@
                     {% if g.ai_prob is none %}n/a{% else %}{{ (g.ai_prob * 100) | round | int }}%{% endif %}
                 </td>
                 <td class="confidence">{% if g.ai_confidence is none %}n/a{% else %}{{ (g.ai_confidence * 100) | round | int }}%{% endif %}</td>
+                <td>{% if g.fair_prob is none %}n/a{% else %}{{ (g.fair_prob * 100) | round | int }}%{% endif %}</td>
                 <td>
                     {% if g.outcome is none %}
                         <span class="pill pending">pending</span>

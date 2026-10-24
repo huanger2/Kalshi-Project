@@ -8,6 +8,7 @@
     "max_price": 0.9,
     "min_ais": 2,
     "min_confidence": 0.0,
+    "odds_model": "fair",
     "leagues": ["NBA", "NFL", "NHL", "MLB"],
     "segments": ["regular", "postseason"]
 }

@@ -370,6 +370,8 @@ class OwnSettingsTests(AccountsPageTestCase):
             self.assertEqual(row.count("<td"), header_cells)  # every row lines up with the headers
         page = self.client.get("/markets/KXNBAGAME-26OCT21LALBOS-LAL").text
         self.assertIn("AI confidence", page)
+        self.assertIn("Fair odds", page)
+        self.assertIn("Fair odds</th>", self.client.get("/").text)
         self.assertIn(">60%<", flat(page))
         with self.db() as conn:
             Accounts.set_setting(conn, self.user["id"], "ai_weights", {"openai": 1, "claude": 0, "gemini": 1})

@@ -47,14 +47,14 @@ def list_bets(conn: sqlite3.Connection, user_id: int, mode: Optional[str] = None
     """
     rows = conn.execute(
         "SELECT b.id, b.created_at, b.mode, b.ticker, b.league, b.game_date, b.team, b.opponent, b.side, "
-        "       b.price, b.count, b.cost, b.fee, b.ai_prob, b.edge, b.ai_confidence, "
+        "       b.price, b.count, b.cost, b.fee, b.ai_prob, b.edge, b.ai_confidence, b.model_prob, "
         "       (SELECT MAX(outcome) FROM predictions p WHERE p.ticker = b.ticker), "
         "       (SELECT MAX(tied) FROM predictions p WHERE p.ticker = b.ticker) "
         "FROM bets b WHERE b.user_id = ? AND (? IS NULL OR b.mode = ?) ORDER BY b.game_date DESC, b.id DESC",
         (user_id, mode, mode),
     ).fetchall()
     keys = ["id", "created_at", "mode", "ticker", "league", "game_date", "team", "opponent", "side",
-            "price", "count", "cost", "fee", "ai_prob", "edge", "ai_confidence"]
+            "price", "count", "cost", "fee", "ai_prob", "edge", "ai_confidence", "model_prob"]
     bets = []
     weights = None
     for row in rows:
@@ -113,12 +113,19 @@ def breakdowns(bets: list[dict]) -> list[dict]:
 def backtest(conn: sqlite3.Connection, config: dict, weights: Optional[dict] = None) -> list[dict]:
     """
     Replay the rules (all but min_edge, which each row varies) over every
-    settled game logged so far, at the prices recorded when it was logged:
+    settled game logged so far, on fair odds (walk-forward, see FairOdds) or
+    the raw AI odds as the rules say, at the prices recorded when it was logged:
     YES at its ask, NO at 1 - yes_bid. Each day's cap goes to its biggest
     edges, as in the daily run. One summary row per edge threshold, flagging
     the one in effect.
     """
-    games = [g for g in queries.list_games(conn, weights=weights) if g["outcome"] is not None]
+    every = queries.list_games(conn, weights=weights)
+    games = [g for g in every if g["outcome"] is not None]
+    if config.get("odds_model", "fair") == "fair":
+        # Each day priced by a model fitted only on the days before it, as the daily run would have.
+        import FairOdds
+        fair = FairOdds.cached_walk_forward(every, weights)
+        games = [{**g, "ai_prob": fair.get(g["ticker"])} for g in games]
     edges = sorted({round(e, 6) for e in BACKTEST_EDGES + [config["min_edge"]]})
     rows = []
     for min_edge in edges:
@@ -219,6 +226,7 @@ def view(conn: sqlite3.Connection, user: dict, shown: Optional[str] = None) -> d
                        "default": AIWeights.defaults().get(key, 1.0)} for key, name in PROVIDERS],
         "custom_weights": Accounts.get_setting(conn, uid, "ai_weights") is not None,
         "weights_brier": _brier(conn, config, weights),
+        "fair": fair_view(conn, weights),
     }
 
 
@@ -262,6 +270,9 @@ def _parse(conn: sqlite3.Connection, user_id: int, form: Mapping, check_mode: bo
         errors.append("The lowest price can't be above the highest price.")
     leagues = [code for code in Leagues.LEAGUES if code in (form.get("leagues") or [])]
     segments = [seg for seg in Betting.SEGMENTS if seg in (form.get("segments") or [])]
+    odds_model = form.get("odds_model") or "fair"
+    if odds_model not in Betting.ODDS_MODELS:
+        errors.append(f"Odds to bet on: {odds_model!r} isn't one of {', '.join(Betting.ODDS_MODELS)}.")
 
     weights = None
     if any(f"weight::{key}" in form for key, _ in PROVIDERS):
@@ -274,8 +285,17 @@ def _parse(conn: sqlite3.Connection, user_id: int, form: Mapping, check_mode: bo
 
     rules = {"mode": mode, "min_edge": min_edge, "stake_usd": stake, "max_daily_usd": daily, "min_price": min_price,
              "max_price": max_price, "min_ais": int(min_ais), "min_confidence": min_confidence or 0.0,
-             "leagues": leagues, "segments": segments}
+             "odds_model": odds_model, "leagues": leagues, "segments": segments}
     return rules, weights
+
+
+def fair_view(conn: sqlite3.Connection, weights: dict) -> dict:
+    """What the fair-odds model currently makes of the AIs, for the Betting tab."""
+    import FairOdds
+
+    model = FairOdds.model_for(conn, weights)
+    return {"trusts": model.trusts_ais, "beta": model.beta, "gamma": model.gamma, "k1": model.k1,
+            "games": model.games, "held_out": model.held_out, "min_games": FairOdds.MIN_GAMES}
 
 
 def save_config(conn: sqlite3.Connection, user_id: int, form: Mapping) -> None:

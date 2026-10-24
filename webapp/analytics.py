@@ -100,11 +100,29 @@ def view(conn: sqlite3.Connection, user: dict, segments: Optional[list[str]] = N
         "sources": Optimizer.source_scores(games, weights),
         "calibration": Optimizer.calibration(games, weights),
         "edges": Optimizer.edge_returns(games, weights),
+        "fair": fair_summary(conn, weights),
         "confidences": Optimizer.confidence_returns(games, weights),
         "run": run,
         "stale": bool(run) and run_segments == segments and run.get("games") != len(games),
         "verdicts": _verdicts(run) if run else None,
     }
+
+
+def _fair_odds(conn: sqlite3.Connection, weights_result: dict) -> dict:
+    """Walk-forward fair odds with the suggested weights, for replaying rules that bet on fair odds."""
+    import FairOdds
+
+    suggested = weights_result["suggested"]
+    return FairOdds.cached_walk_forward(FairOdds.load(conn, suggested), suggested)
+
+
+def fair_summary(conn: sqlite3.Connection, weights: dict) -> dict:
+    """The fair-odds model with the user's weights: how far it trusts the AIs, and how it scores on held-out days."""
+    import FairOdds
+
+    model = FairOdds.model_for(conn, weights)
+    return {"trusts": model.trusts_ais, "beta": model.beta, "gamma": model.gamma, "k0": model.k0, "k1": model.k1,
+            "games": model.games, "held_out": model.held_out, "lam": model.lam}
 
 
 def run(conn: sqlite3.Connection, user: dict, segments: Optional[list[str]] = None) -> dict:
@@ -127,7 +145,7 @@ def run(conn: sqlite3.Connection, user: dict, segments: Optional[list[str]] = No
         "games": len(games),
         "days": len(Optimizer.days_of(games)),
         "weights": weights,
-        "rules": {**Optimizer.optimize_rules(games, weights["suggested"], rules),
+        "rules": {**Optimizer.optimize_rules(games, weights["suggested"], rules, fair=_fair_odds(conn, weights)),
                   "current_rules": {k: rules[k] for k in RULE_KEYS + ["stake_usd", "max_daily_usd"]}},
     }
     Accounts.set_setting(conn, uid, RUN_SETTING, result)
@@ -163,6 +181,7 @@ def apply(conn: sqlite3.Connection, user: dict, which: str) -> list[str]:
             "max_price": repr(merged["max_price"] * 100), "stake_usd": repr(merged["stake_usd"]),
             "max_daily_usd": repr(merged["max_daily_usd"]), "min_ais": str(merged["min_ais"]),
             "min_confidence": repr(merged["min_confidence"] * 100),
+            "odds_model": merged.get("odds_model", "fair"),
             "leagues": merged["leagues"], "segments": merged["segments"],
             # Applying rules never changes the mode, so a live user isn't asked to re-confirm.
             "confirm_live": "yes" if current["mode"] == "live" else "",

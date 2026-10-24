@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS bets (
     ai_prob        REAL    NOT NULL,  -- the AIs' consensus YES probability
     edge           REAL    NOT NULL,  -- the bet side's AI probability minus price
     ai_confidence  REAL,              -- the AIs' confidence averaged by the user's weights, when placed
+    model_prob     REAL,              -- the YES probability the bet was decided on (fair odds, or the AI odds)
     order_id       TEXT,              -- Kalshi's order id (demo/live only)
     user_id        INTEGER            -- whose bet (Accounts.py users.id)
 );
@@ -104,7 +105,7 @@ _MIGRATED_COLUMNS = {
     "team": "TEXT", "opponent": "TEXT", "game_date": "TEXT",
     "yes_bid": "REAL", "yes_ask": "REAL", "model": "TEXT", "league": "TEXT", "tied": "INTEGER",
 }
-_MIGRATED_BET_COLUMNS = {"order_id": "TEXT", "user_id": "INTEGER", "ai_confidence": "REAL"}
+_MIGRATED_BET_COLUMNS = {"order_id": "TEXT", "user_id": "INTEGER", "ai_confidence": "REAL", "model_prob": "REAL"}
 _MIGRATED_BALANCE_COLUMNS = {"user_id": "INTEGER"}
 
 

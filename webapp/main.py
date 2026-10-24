@@ -258,8 +258,13 @@ def _render_markets(
     tab. Admins also get the daily run's status and a button to run it now
     (`run` is how the last press went: "started" or "busy").
     """
+    weights = _viewer_weights(request, conn)
     games = queries.list_games(conn, game_date=date, segment=segment, season_year=season, league=league,
-                               weights=_viewer_weights(request, conn))
+                               weights=weights)
+    import FairOdds
+    fair = FairOdds.model_for(conn, weights)
+    for g in games:
+        g["fair_prob"] = fair.fair(g["market_prob"], g["ai_prob"], g["ai_confidence"])
     dates = queries.list_game_dates(conn, segment=segment, season_year=season, league=league)
     seasons = queries.list_season_years(conn, league=league)
     accuracy = queries.accuracy_summary(conn, segment=segment, season_year=season, league=league)
@@ -343,9 +348,13 @@ def daily_run_progress(request: Request):
 
 @app.get("/markets/{ticker}", response_class=HTMLResponse)
 def market_detail_page(request: Request, ticker: str, conn: sqlite3.Connection = Depends(get_db)):
-    game = queries.get_game(conn, ticker, weights=_viewer_weights(request, conn))
+    weights = _viewer_weights(request, conn)
+    game = queries.get_game(conn, ticker, weights=weights)
     if game is None:
         raise HTTPException(status_code=404, detail=f"No tracked predictions for {ticker!r}")
+    import FairOdds
+    game["fair_prob"] = FairOdds.model_for(conn, weights).fair(game["market_prob"], game["ai_prob"],
+                                                              game["ai_confidence"])
     return templates.TemplateResponse(
         request, "market_detail.html",
         {"game": game, "ai_names": DEFAULT_LLM_NAMES, "active_tab": game["league"] or "markets"},
@@ -665,6 +674,7 @@ def save_betting_rules(
     max_price: str = Form(""),
     min_ais: str = Form(""),
     min_confidence: str = Form(""),
+    odds_model: str = Form("fair"),
     leagues: list[str] = Form([]),
     segments: list[str] = Form([]),
     confirm_live: str = Form(""),
@@ -676,7 +686,7 @@ def save_betting_rules(
     user = _require_user(request)
     form = {"mode": mode, "min_edge": min_edge, "stake_usd": stake_usd, "max_daily_usd": max_daily_usd,
             "min_price": min_price, "max_price": max_price, "min_ais": min_ais, "min_confidence": min_confidence,
-            "leagues": leagues, "segments": segments, "confirm_live": confirm_live}
+            "odds_model": odds_model, "leagues": leagues, "segments": segments, "confirm_live": confirm_live}
     for key, value in (("openai", weight_openai), ("claude", weight_claude), ("gemini", weight_gemini)):
         if value is not None:
             form[f"weight::{key}"] = value

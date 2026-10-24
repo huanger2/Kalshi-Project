@@ -21,8 +21,10 @@ from tests.test_daily_log import LLMS, OCT4, TODAY_MARKETS, DailyLogTestCase, ga
 from webapp import betting
 from webapp.main import app, get_db
 
+# The betting mechanics (caps, modes, keys, duplicates) are tested on the raw AI odds, which bet
+# whenever the AIs disagree with the price; fair odds (the default) are tested on their own below.
 RULES = {**Betting.DEFAULTS, "mode": "paper", "min_edge": 0.05, "stake_usd": 5.0, "max_daily_usd": 50.0,
-         "min_price": 0.10, "max_price": 0.90, "min_ais": 2, "leagues": ["NBA", "NFL"]}
+         "min_price": 0.10, "max_price": 0.90, "min_ais": 2, "leagues": ["NBA", "NFL"], "odds_model": "ai"}
 
 
 def _add_user(db_path, name="admin", rules=None, admin=True, password="s3cret") -> int:
@@ -580,7 +582,8 @@ class BettingPageTests(BettingConfigTestCase):
             conn.close()
 
     def valid_form(self, **changes):
-        form = {"mode": "paper", "min_edge": "7.5", "stake_usd": "10", "max_daily_usd": "100", "min_price": "15",
+        form = {"mode": "paper", "odds_model": "ai", "min_edge": "7.5", "stake_usd": "10", "max_daily_usd": "100",
+                "min_price": "15",
                 "max_price": "85", "min_ais": "3", "leagues": ["NBA", "NHL"],
                 "segments": ["regular", "postseason"]}
         form.update(changes)
@@ -608,7 +611,7 @@ class BettingPageTests(BettingConfigTestCase):
         self.assertEqual(r.status_code, 303)
         self.assertEqual({k: self.rules()[k] for k in RULES}, {
             "mode": "paper", "min_edge": 0.075, "stake_usd": 10.0, "max_daily_usd": 100.0, "min_price": 0.15,
-            "max_price": 0.85, "min_ais": 3, "min_confidence": 0.0, "leagues": ["NBA", "NHL"],
+            "max_price": 0.85, "min_ais": 3, "min_confidence": 0.0, "odds_model": "ai", "leagues": ["NBA", "NHL"],
             "segments": ["regular", "postseason"]})
         self.assertIn("Rules saved.", self.client.get(r.headers["location"]).text)
 
@@ -693,6 +696,26 @@ class BettingPageTests(BettingConfigTestCase):
     def test_guests_cannot_preview(self):
         self.client.post("/guest")
         self.assertEqual(self.client.post("/betting/preview", data=self.valid_form()).status_code, 403)
+
+    def test_choosing_the_odds_to_bet_on(self):
+        self.sign_in()
+        page = self.client.get("/betting").text
+        self.assertIn('name="odds_model"', page)
+        self.assertIn("Fair odds:", page)
+        self.client.post("/betting/rules", data=self.valid_form(odds_model="fair"))
+        self.assertEqual(self.rules()["odds_model"], "fair")
+        r = self.client.post("/betting/rules", data=self.valid_form(odds_model="vibes"))
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(self.rules()["odds_model"], "fair")
+
+    def test_the_what_if_table_on_untrained_fair_odds_places_nothing(self):
+        # GAMES are 3 settled games: far too few to trust the AIs, so fair odds are Kalshi's price.
+        conn = Tracker.connect(self.db_path)
+        try:
+            rows = betting.backtest(conn, {**RULES, "odds_model": "fair", "min_edge": 0.0, "segments": ["preseason"]})
+        finally:
+            conn.close()
+        self.assertEqual({r["bets"] for r in rows}, {0})
 
     def test_saving_a_confidence_minimum(self):
         self.sign_in()

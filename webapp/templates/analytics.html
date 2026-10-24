@@ -182,6 +182,34 @@
     {% endif %}
 </section>
 
+<section class="panel" id="fair">
+    {% set f = a.fair %}
+    <h2>Fair odds model</h2>
+    <p class="subtitle">What bets are decided on by default: Kalshi's price, moved by how much the AIs disagree with it
+        <em>more than they usually would</em> -- and only as far as that has paid off on days the model wasn't fitted to.
+        The AIs' odds hug 50% (their log-odds move {{ "%.2f" | format(f.k1) }}&times; as much as Kalshi's), so comparing
+        them to the price directly mostly backs underdogs; this doesn't.</p>
+    <div class="stats-grid">
+        <div class="stat"><span class="label">Trust in AI surprise</span>
+            <span class="value">&times;{{ "%.2f" | format(f.beta) }}</span>
+            <span class="sub">{% if f.gamma %}+{{ "%.2f" | format(f.gamma) }} per unit of confidence{% else %}0 = fair odds are Kalshi's price{% endif %}</span></div>
+        <div class="stat"><span class="label">Settled games used</span><span class="value">{{ f.games }}</span>
+            <span class="sub">your weights; all parts of the season</span></div>
+        {% if f.held_out %}
+        <div class="stat"><span class="label">Brier, unseen days: fair odds</span><span class="value">{{ brier(f.held_out.fair) }}</span>
+            <span class="sub">lower is better</span></div>
+        <div class="stat"><span class="label">Kalshi's price</span><span class="value">{{ brier(f.held_out.market) }}</span>
+            <span class="sub">the bar to beat</span></div>
+        <div class="stat"><span class="label">Raw AI odds</span><span class="value">{{ brier(f.held_out.ai) }}</span>
+            <span class="sub">what the AIs say as is</span></div>
+        {% endif %}
+    </div>
+    <p class="note">{% if f.trusts %}The AIs' surprise has beaten Kalshi's price on held-out days, so it moves the fair odds
+        -- bets happen where it moves them past the price by your minimum edge.
+        {% else %}So far the AIs' surprise hasn't beaten Kalshi's price on held-out days, so fair odds equal the price and
+        betting on fair odds places no bets. That's the honest answer with this data; it updates as games settle.{% endif %}</p>
+</section>
+
 <div class="panel-row">
 <section class="panel" id="calibration">
     <h2>Calibration</h2>

@@ -333,6 +333,20 @@ starts with betting off. The mode says where your bets go:
 | Kalshi demo | orders go to [Kalshi's demo exchange](https://demo.kalshi.co), with play money |
 | Live | **real-money orders on Kalshi** |
 
+**Which odds bets are decided on.** By default, **fair odds** (see
+[`FairOdds.py`](FairOdds.py)), not the raw AI odds. The AIs' odds hug 50%:
+their log-odds move about a tenth as far as Kalshi's prices. Compared with
+the ask directly, every favorite looks overpriced and every underdog cheap,
+so raw AI odds back underdogs nearly every time. Fair odds start from
+Kalshi's price and move it only by the AIs' *surprise* (how much more they
+disagree with the price than they usually would about a game priced like
+that), and only as far as that surprise has beaten Kalshi's price on game
+days the model wasn't fitted to. More confident surprise can count for more.
+It never inverts the AIs' view, and until they show skill, fair odds *are*
+Kalshi's price, so no bets are placed. The Betting tab says where the model
+stands, and the Analytics tab shows its held-out scores. "Raw AI odds" is
+still a choice under the rules.
+
 A demo or live bet is an immediate-or-cancel limit order at the price the
 rules were checked against. It fills at that price or better, partly, or
 not at all if the price has moved, and only what filled is recorded, at
@@ -687,6 +701,7 @@ day's run catches it up.
 | `ClaudeAi.py`, `OpenAi.py`, `Gemini.py` | One wrapper per AI API |
 | `AISettings.py`, `ai_settings.json` | Which model each AI uses |
 | `Accounts.py` | Users, their own settings (betting rules, AI weights) and encrypted Kalshi keys; the first admin |
+| `FairOdds.py` | The fair-odds model bets are decided on: Kalshi's price moved by the AIs' proven surprise |
 | `Optimizer.py` | The Analytics tab's optimizer and diagnostics: weight fitting, rule search, walk-forward checks |
 | `AIWeights.py`, `ai_weights.json` | Each AI's weight for the AI-odds consensus: site defaults, and each user's own |
 | `Betting.py`, `betting.json` | Per-user betting: which games get a bet, its size and Kalshi fee, placing it, and its result (`betting.json` only seeds the first admin) |

@@ -50,6 +50,9 @@ import Leagues
 
 BETTING_PATH = Path(__file__).with_name("betting.json")
 MODES = ["off", "paper", "demo", "live"]
+# Which probability bets are decided on: "fair" (FairOdds.py: Kalshi's price, moved only as far as the AIs'
+# surprise has earned) or "ai" (the raw AI odds, which hug 50% and so mostly back underdogs).
+ODDS_MODELS = ["fair", "ai"]
 TRADING_MODES = ["demo", "live"]  # the modes that send orders to Kalshi (Kalshi.TRADING_BASES)
 SEGMENTS = ["preseason", "regular", "postseason"]  # see SeasonType.segment()
 
@@ -62,6 +65,7 @@ DEFAULTS = {
     "max_price": 0.90,
     "min_ais": 2,
     "min_confidence": 0.0,  # the AIs' weighted average confidence (EVCalculator.consensus_confidence()), 0-1
+    "odds_model": "fair",  # see ODDS_MODELS
     "leagues": list(Leagues.LEAGUES),
     "segments": list(SEGMENTS),
 }
@@ -107,8 +111,13 @@ def bettors(conn: sqlite3.Connection) -> list[dict]:
             if creds is None:
                 print(f"no bets for {user['username']}: {mode} mode, but no Kalshi {mode} key saved")
                 continue
+        weights = AIWeights.for_user(conn, user["id"])
+        fair_model = None
+        if config.get("odds_model", "fair") == "fair":
+            import FairOdds
+            fair_model = FairOdds.model_for(conn, weights)
         found.append({"user_id": user["id"], "username": user["username"], "config": config,
-                      "weights": AIWeights.for_user(conn, user["id"]), "creds": creds})
+                      "weights": weights, "creds": creds, "fair_model": fair_model})
     return found
 
 
@@ -271,11 +280,20 @@ def candidate(
     weights = {p.llm_name: AIWeights.lookup(bettor["weights"], p.llm_name) for p in predictions}
     ai_prob = consensus_probability(predictions, weights)
     ai_confidence = consensus_confidence(predictions, weights)
-    bet, reason = decide(ai_prob, len(predictions), prices.get("yes_ask"), prices.get("no_ask"), league, config,
+    model_prob = ai_prob
+    if config.get("odds_model", "fair") == "fair":
+        import FairOdds
+        model = bettor.get("fair_model") or FairOdds.Model()  # no model: no trust, fair odds = Kalshi
+        bid, ask = prices.get("yes_bid"), prices.get("yes_ask")
+        market_prob = (bid + ask) / 2 if bid is not None and ask is not None else (ask if ask is not None else bid)
+        model_prob = model.fair(market_prob, ai_prob, ai_confidence)
+    bet, reason = decide(model_prob, len(predictions), prices.get("yes_ask"), prices.get("no_ask"), league, config,
                          segment=SeasonType.segment_iso(game_date, league), ai_confidence=ai_confidence)
     if bet is None:
         print(f"no bet for {bettor['username']} on {ticker}: {reason}")
         return None
+    # The bet keeps both: the raw AI odds, and the probability it was decided on.
+    bet = {**bet, "ai_prob": ai_prob, "model_prob": model_prob}
     return {**bet, "ai_confidence": ai_confidence, "user_id": bettor["user_id"], "mode": mode, "ticker": ticker,
             "event_ticker": market.get("event_ticker"), "league": league, "game_date": game_date,
             "team": market.get("yes_sub_title"), "opponent": opponent, "reason": reason}
@@ -302,12 +320,12 @@ def place(conn: sqlite3.Connection, bettor: dict, candidates: list[dict]) -> lis
                 continue
         conn.execute(
             "INSERT INTO bets (created_at, user_id, mode, ticker, event_ticker, league, game_date, team, opponent, "
-            " side, price, count, cost, fee, ai_prob, edge, order_id, ai_confidence) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " side, price, count, cost, fee, ai_prob, edge, order_id, ai_confidence, model_prob) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (datetime.datetime.now().isoformat(timespec="seconds"), bet["user_id"], bet["mode"], bet["ticker"],
              bet["event_ticker"], bet["league"], bet["game_date"], bet["team"], bet["opponent"], bet["side"],
              bet["price"], bet["count"], bet["cost"], bet["fee"], bet["ai_prob"], bet["edge"], bet.get("order_id"),
-             bet.get("ai_confidence")),
+             bet.get("ai_confidence"), bet.get("model_prob")),
         )
         # One commit per bet: a real order already went through, so a crash
         # on a later one mustn't lose the record of this one.
@@ -359,7 +377,8 @@ def send(bet: dict, creds) -> Optional[dict]:
     if not fill["count"]:
         print(f"no {bet['mode']} bet on {bet['ticker']}: nothing on offer at {bet['price']:.2f} or better any more")
         return None
-    side_prob = bet["ai_prob"] if bet["side"] == "yes" else 1 - bet["ai_prob"]
+    decided_on = bet.get("model_prob", bet["ai_prob"])
+    side_prob = decided_on if bet["side"] == "yes" else 1 - decided_on
     reason = (f"{bet['side'].upper()} x{fill['count']} at {fill['price']:.2f}, edge {side_prob - fill['price']:+.1%}"
               f" (order {fill['order_id']})")
     return {**bet, **fill, "edge": side_prob - fill["price"], "reason": reason}

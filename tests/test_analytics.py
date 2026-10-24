@@ -229,6 +229,7 @@ class AnalyticsPageTests(unittest.TestCase):
         self.sign_in()
         page = self.client.get("/analytics").text
         self.assertIn("Does confidence pay?", page)
+        self.assertIn("Fair odds model", page)
         self.assertIn("<th>AI confidence</th>", page)
 
     def test_run_then_apply_rules(self):
