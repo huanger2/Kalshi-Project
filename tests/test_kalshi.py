@@ -277,6 +277,74 @@ class TradingTests(unittest.TestCase):
                 Kalshi.buy("T", "yes", 3, 0.5, LIVE)
 
 
+class ShardTests(unittest.TestCase):
+    """Cash has to be on a market's exchange shard before an API order (Kalshi's exchange sharding)."""
+
+    def setUp(self):
+        self.balances = {0: 100.0, 3: 0.0}
+        self.transfers = []
+
+        def trade(method, endpoint, creds, body=None):
+            if endpoint == "/portfolio/balance":
+                return {"balance_dollars": f"{sum(self.balances.values()):.4f}",
+                        "balance_breakdown": [{"exchange_index": i, "balance": f"{v:.4f}"}
+                                              for i, v in self.balances.items()]}
+            if endpoint == "/portfolio/intra_exchange_instance_transfer":
+                self.transfers.append(body)
+                amount = body["amount"] / 10000
+                self.balances[body["source_exchange_shard"]] -= amount
+                self.balances[body["destination_exchange_shard"]] =                     self.balances.get(body["destination_exchange_shard"], 0.0) + amount
+                return {"transfer_id": "t1"}
+            raise AssertionError(endpoint)
+
+        patcher = mock.patch.object(Kalshi, "_trade_request", side_effect=trade)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_balances_per_shard(self):
+        self.assertEqual(Kalshi.shard_balances(LIVE), {0: 100.0, 3: 0.0})
+
+    def test_moves_just_the_shortfall_from_the_richest_shard(self):
+        self.balances = {0: 100.0, 2: 3.0, 3: 1.0}
+        moved = Kalshi.fund_shard(LIVE, 3, 5.13, sleep=lambda s: None)
+        self.assertEqual(moved, 4.13)
+        self.assertEqual(len(self.transfers), 1)
+        t = self.transfers[0]
+        self.assertEqual((t["source"], t["destination"], t["amount"]), ("event_contract", "event_contract", 41300))
+        self.assertEqual((t["source_exchange_shard"], t["destination_exchange_shard"]), (0, 3))
+        self.assertTrue(t["client_transfer_id"])
+
+    def test_nothing_moved_when_the_shard_has_enough(self):
+        self.balances = {0: 1.0, 3: 50.0}
+        self.assertIsNone(Kalshi.fund_shard(LIVE, 3, 5.0, sleep=lambda s: None))
+        self.assertEqual(self.transfers, [])
+
+    def test_not_enough_cash_anywhere_says_so(self):
+        self.balances = {0: 2.0, 3: 1.0}
+        with self.assertRaisesRegex(Kalshi.TradingError, r"needs \$5.00 on Kalshi's exchange shard 3"):
+            Kalshi.fund_shard(LIVE, 3, 5.0, sleep=lambda s: None)
+        self.assertEqual(self.transfers, [])
+
+    def test_a_transfer_that_hasnt_landed_in_time(self):
+        original = Kalshi._trade_request.side_effect
+
+        def slow(method, endpoint, creds, body=None):
+            if endpoint == "/portfolio/intra_exchange_instance_transfer":
+                self.transfers.append(body)
+                return {"transfer_id": "t1"}  # accepted, but the money never shows up
+            return original(method, endpoint, creds, body)
+
+        Kalshi._trade_request.side_effect = slow
+        with self.assertRaisesRegex(Kalshi.TradingError, "hadn't arrived"):
+            Kalshi.fund_shard(LIVE, 3, 5.0, sleep=lambda s: None, wait_seconds=3)
+
+    def test_a_markets_shard_comes_from_the_market(self):
+        with mock.patch.object(Kalshi, "get_market", return_value={"ticker": "T", "exchange_index": 3}):
+            self.assertEqual(Kalshi.market_shard("T"), 3)
+        with mock.patch.object(Kalshi, "get_market", return_value={"ticker": "T"}):
+            self.assertEqual(Kalshi.market_shard("T"), 0)
+
+
 class ImportSideEffectTests(unittest.TestCase):
     def test_importing_kalshi_makes_no_network_calls_and_needs_no_key(self):
         with mock.patch("requests.get", side_effect=AssertionError("network call at import")):

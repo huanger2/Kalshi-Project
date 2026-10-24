@@ -522,13 +522,20 @@ def record_balance(conn: sqlite3.Connection, user_id: int, mode: str, balance: f
 def send(bet: dict, creds) -> tuple[Optional[dict], Optional[str]]:
     """
     Send a demo/live bet to Kalshi with `creds` (the user's key) as an
-    immediate-or-cancel buy at its price or better. Returns (the bet as
+    immediate-or-cancel buy at its price or better, first moving cash onto
+    the market's exchange shard if it's short there. Returns (the bet as
     filled -- count, price, cost, fee and edge from the fill, plus order_id
     -- None), or (None, why) if nothing filled or Kalshi refused; either way
     the run goes on to the next bet.
     """
     import Kalshi
 
+    # The market's exchange shard needs the cash on it (see Kalshi.fund_shard()).
+    try:
+        Kalshi.fund_shard(creds, Kalshi.market_shard(bet["ticker"]), bet["cost"] + bet["fee"])
+    except Exception as e:
+        print(f"{bet['mode']} order on {bet['ticker']} not sent: {e}")
+        return None, f"couldn't fund the order on Kalshi: {e}"
     try:
         fill = Kalshi.buy(bet["ticker"], bet["side"], bet["count"], bet["price"], creds)
     except Exception as e:

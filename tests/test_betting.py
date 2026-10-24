@@ -231,7 +231,10 @@ class DailyRunBettingTests(DailyLogTestCase):
     def setUp(self):
         super().setUp()
         for patcher in (mock.patch.object(AIWeights, "get_weight", return_value=1.0),
-                        mock.patch.object(Accounts, "kalshi_credentials", side_effect=fake_credentials)):
+                        mock.patch.object(Accounts, "kalshi_credentials", side_effect=fake_credentials),
+                        # The exchange-shard funding step talks to Kalshi; tested on its own in test_kalshi.
+                        mock.patch.object(Kalshi, "market_shard", return_value=3),
+                        mock.patch.object(Kalshi, "fund_shard", return_value=None)):
             patcher.start()
             self.addCleanup(patcher.stop)
         self.uid = _add_user(self.db_path, "bettor", admin=False)
@@ -412,6 +415,28 @@ class DailyRunBettingTests(DailyLogTestCase):
         self.assertEqual(result["placed"], 0)
         self.assertEqual(result["outcomes"][0]["outcome"], "Kalshi refused the live order: HTTP 401 unauthorized")
         self.assertEqual(self.bets(), [])
+
+    def test_an_order_kalshi_cant_fund_is_explained_and_not_sent(self):
+        self.set_rules(min_edge=0.10)
+        self.run_day(OCT4, TODAY_MARKETS[:2])
+        self.set_rules(mode="live", min_edge=0.02)
+        conn = Tracker.connect(self.db_path)
+        try:
+            user = Accounts.get_user(conn, self.uid)
+            with mock.patch.object(Kalshi, "fund_shard", side_effect=Kalshi.TradingError("not enough cash")),                  mock.patch("Kalshi.buy", side_effect=AssertionError("sent an unfunded order")),                  mock.patch("builtins.print"):
+                result = Betting.rerun_today(conn, user, fetch_market=self.open_market, today=OCT4)
+        finally:
+            conn.close()
+        self.assertEqual(result["outcomes"][0]["outcome"], "couldn't fund the order on Kalshi: not enough cash")
+
+    def test_an_order_is_funded_on_its_markets_shard_first(self):
+        self.set_rules(mode="demo", min_edge=0.02)
+        fill = {"order_id": "o", "count": 8, "price": 0.62, "cost": 4.96, "fee": 0.13}
+        with mock.patch.object(Kalshi, "fund_shard") as fund, mock.patch("Kalshi.buy", return_value=fill),              mock.patch("Kalshi.get_balance", return_value=1.0):
+            self.run_day(OCT4, TODAY_MARKETS[:2])
+        creds, shard, needed = fund.call_args.args
+        self.assertEqual((creds.env, shard), ("demo", 3))
+        self.assertAlmostEqual(needed, 4.96 + Betting.fee(8, 0.62))  # the order's worst-case cost and fee
 
     def test_an_order_with_nothing_at_the_price_is_explained(self):
         self.set_rules(min_edge=0.10)

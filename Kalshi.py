@@ -4,6 +4,7 @@ import math
 import os
 import re
 import textwrap
+import time
 import uuid
 from typing import NamedTuple, Optional
 from urllib.parse import urlparse
@@ -167,6 +168,79 @@ def get_balance(creds: Credentials) -> float:
     if data.get("balance_dollars") not in (None, ""):
         return float(data["balance_dollars"])
     return data["balance"] / 100.0
+
+
+# ---------------------------------------------------------------------------
+# Exchange shards
+# ---------------------------------------------------------------------------
+#
+# Kalshi runs several matching engines ("exchange shards", numbered by
+# exchange_index): sports markets live on their own shard, apart from the
+# default shard 0 where deposits land. Each shard checks collateral against
+# the cash on *it*, and only Kalshi's own apps move money between shards for
+# you -- an API order on a shard with no cash is refused with
+# insufficient_shard_balance ("Exchange user not found" if the account has
+# never had money there). So before an order, fund_shard() moves what's
+# missing onto the market's shard. (docs.kalshi.com: Exchange Sharding.)
+
+SHARD_WAIT_SECONDS = 15  # transfers between shards are asynchronous
+
+
+def market_shard(ticker: str) -> int:
+    """The exchange shard a market trades on (0 when Kalshi doesn't say)."""
+    return int(get_market(ticker).get("exchange_index") or 0)
+
+
+def shard_balances(creds: Credentials) -> dict[int, float]:
+    """Available cash per exchange shard, in dollars."""
+    data = _trade_request("GET", "/portfolio/balance", creds)
+    breakdown = data.get("balance_breakdown") or []
+    if breakdown:
+        return {int(b["exchange_index"]): float(b["balance"]) for b in breakdown}
+    total = float(data["balance_dollars"]) if data.get("balance_dollars") not in (None, "") else data["balance"] / 100
+    return {0: total}
+
+
+def transfer_between_shards(creds: Credentials, dollars: float, source: int, destination: int) -> str:
+    """Move cash between two of the account's exchange shards. Returns Kalshi's transfer id (it completes later)."""
+    body = {
+        "source": "event_contract",
+        "destination": "event_contract",
+        "amount": int(round(dollars * 10000)),  # centicents
+        "source_exchange_shard": source,
+        "destination_exchange_shard": destination,
+        "client_transfer_id": str(uuid.uuid4()),
+    }
+    return _trade_request("POST", "/portfolio/intra_exchange_instance_transfer", creds, body).get("transfer_id")
+
+
+def fund_shard(creds: Credentials, shard: int, needed: float, sleep=time.sleep,
+               wait_seconds: float = SHARD_WAIT_SECONDS) -> Optional[float]:
+    """
+    Make sure `shard` has at least `needed` dollars, moving the shortfall
+    from whichever other shard has the most cash. Returns the dollars moved
+    (None if none were needed). Raises TradingError if the account doesn't
+    have that much anywhere, or the transfer hasn't landed in time.
+    """
+    balances = shard_balances(creds)
+    have = balances.get(shard, 0.0)
+    if have >= needed:
+        return None
+    shortfall = math.ceil((needed - have) * 100) / 100
+    donors = sorted(((cash, index) for index, cash in balances.items() if index != shard), reverse=True)
+    if not donors or donors[0][0] < shortfall:
+        elsewhere = sum(cash for cash, _ in donors)
+        raise TradingError(f"not enough cash: the order needs ${needed:.2f} on Kalshi's exchange shard {shard}, "
+                           f"which has ${have:.2f}, with ${elsewhere:.2f} on the others")
+    transfer_between_shards(creds, shortfall, donors[0][1], shard)
+    waited = 0.0
+    while waited < wait_seconds:
+        sleep(1.0)
+        waited += 1.0
+        if shard_balances(creds).get(shard, 0.0) >= needed:
+            return shortfall
+    raise TradingError(f"moved ${shortfall:.2f} to Kalshi's exchange shard {shard}, but it hadn't arrived after "
+                       f"{int(wait_seconds)}s; the next run will use it")
 
 
 def buy(ticker: str, side: str, count: int, price: float, creds: Credentials,

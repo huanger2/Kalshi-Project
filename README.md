@@ -352,6 +352,13 @@ that must answer, minimum confidence) don't apply, and are hidden while it's
 chosen. When the daily cap can't cover them all, the strongest favorites go
 first.
 
+Kalshi runs separate exchange "shards" (sports markets aren't on shard 0,
+where deposits land), and each checks only its own cash. Kalshi's apps move
+money between them for you; API orders don't, and fail with
+`insufficient_shard_balance`. So before each demo/live order, the market's
+shard is topped up with just what the order needs, moved from your
+best-funded shard.
+
 A demo or live bet is an immediate-or-cancel limit order at the price the
 rules were checked against. It fills at that price or better, partly, or
 not at all if the price has moved, and only what filled is recorded, at
