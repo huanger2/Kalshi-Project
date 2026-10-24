@@ -404,6 +404,13 @@ edge. As you edit any rule or weight, the **What if?** table and the AI
 odds' Brier score update to match (replayed on the server, nothing saved
 until you click Save).
 
+**Save and apply to today's games** (next to Save) saves the rules and runs
+them over today's already-logged games straight away, instead of waiting for
+the next daily run. Prices are fetched fresh from Kalshi, games no longer
+trading are skipped, games you've already bet are left as they are, and the
+AIs aren't asked again. Rules a choice of **Odds to bet on** doesn't use
+(the minimum edge, for Kalshi favorite) are hidden while it's chosen.
+
 **Check bets** (above the bet list, while any are pending) asks Kalshi right
 away whether your pending bets' games have finished, instead of waiting for
 the next daily run. Results are recorded the same way the daily run records

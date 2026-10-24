@@ -358,6 +358,58 @@ class DailyRunBettingTests(DailyLogTestCase):
         finally:
             conn.close()
 
+    def open_market(self, ticker, status="active"):
+        return {"ticker": ticker, "status": status, "yes_bid_dollars": "0.6000", "yes_ask_dollars": "0.6200"}
+
+    def test_applying_new_rules_to_todays_games(self):
+        self.set_rules(min_edge=0.10)  # Denver's 2.5 point edge doesn't qualify
+        self.run_day(OCT4, TODAY_MARKETS[:2])
+        self.assertEqual(self.bets(), [])
+        self.set_rules(min_edge=0.02)
+        conn = Tracker.connect(self.db_path)
+        try:
+            user = Accounts.get_user(conn, self.uid)
+            with mock.patch("builtins.print"):
+                result = Betting.rerun_today(conn, user, fetch_market=self.open_market, today=OCT4)
+                self.assertEqual((result["day"], result["games"], result["placed"]), ("2026-10-04", 1, 1))
+                # Again: that game already has its bet, so it's left alone.
+                again = Betting.rerun_today(conn, user, fetch_market=self.open_market, today=OCT4)
+        finally:
+            conn.close()
+        self.assertEqual((again["placed"], again["already"]), (0, 1))
+        self.assertEqual([b[0] for b in self.bets()], ["KXNBAGAME-26OCT04UTADEN-DEN"])
+
+    def test_applying_skips_closed_and_unreachable_markets(self):
+        self.set_rules(min_edge=0.10)
+        self.run_day(OCT4, TODAY_MARKETS[:2])
+        self.set_rules(min_edge=0.02)
+        conn = Tracker.connect(self.db_path)
+        try:
+            user = Accounts.get_user(conn, self.uid)
+            closed = Betting.rerun_today(conn, user, today=OCT4,
+                                         fetch_market=lambda t: self.open_market(t, status="closed"))
+            with mock.patch("builtins.print"):
+                down = Betting.rerun_today(conn, user, today=OCT4, fetch_market=mock.Mock(side_effect=OSError("x")))
+        finally:
+            conn.close()
+        self.assertEqual((closed["closed"], closed["placed"]), (1, 0))
+        self.assertEqual((down["failed"], down["placed"]), (1, 0))
+        self.assertEqual(self.bets(), [])
+
+    def test_applying_with_betting_off_or_an_old_slate_does_nothing(self):
+        self.run_day(OCT4, TODAY_MARKETS[:2])
+        conn = Tracker.connect(self.db_path)
+        try:
+            user = Accounts.get_user(conn, self.uid)
+            stale = Betting.rerun_today(conn, user, fetch_market=self.open_market,
+                                        today=OCT4 + datetime.timedelta(days=3))
+            self.assertIn("no unsettled games", stale["why"])
+            Accounts.set_setting(conn, self.uid, "betting", {**RULES, "mode": "off"})
+            off = Betting.rerun_today(conn, user, fetch_market=self.open_market, today=OCT4)
+        finally:
+            conn.close()
+        self.assertEqual(off["why"], "betting is off")
+
     def test_too_little_ai_confidence_means_no_bet(self):
         # LLMS say 80%, 60% and 50% confident: 63% averaged with equal weights.
         self.set_rules(min_edge=0.02, min_confidence=0.65)
@@ -768,6 +820,56 @@ class BettingPageTests(BettingConfigTestCase):
         finally:
             conn.close()
         self.assertEqual({r["bets"] for r in rows}, {0})
+
+    def test_decimal_values_save_and_show_exactly(self):
+        # The fields used to reject these in the browser (step 0.05 / 0.5 / 1) without saying so clearly.
+        self.sign_in()
+        self.client.post("/betting/rules", data=self.valid_form(
+            min_edge="2.25", min_confidence="35.5", max_daily_usd="12345.67",
+            **{"weight::openai": "1.33", "weight::claude": "1", "weight::gemini": "1"}))
+        rules = self.rules()
+        self.assertEqual((rules["min_edge"], rules["min_confidence"], rules["max_daily_usd"]), (0.0225, 0.355, 12345.67))
+        page = self.client.get("/betting").text
+        for shown in ('value="2.25"', 'value="35.5"', 'value="12345.67"', 'value="1.33"'):
+            self.assertIn(shown, page)
+        self.assertNotIn('step="0.05"', page)
+        self.assertNotIn('step="0.5"', page)
+
+    def test_a_refused_save_keeps_what_was_typed(self):
+        self.sign_in()
+        r = self.client.post("/betting/rules", data=self.valid_form(
+            stake_usd="12.5", min_price="90", max_price="20", **{"weight::openai": "2.5", "weight::claude": "1",
+                                                                  "weight::gemini": "1"}))
+        self.assertEqual(r.status_code, 400)
+        for shown in ('id="stake_usd" name="stake_usd" type="number" step="any" min="0.01" value="12.5"',
+                      'value="90"', 'value="2.5"'):
+            self.assertIn(shown, r.text)
+        self.assertEqual(self.rules()["stake_usd"], 5.0)  # nothing saved
+
+    def test_kalshi_favorite_hides_the_minimum_edge(self):
+        self.sign_in()
+        self.client.post("/betting/rules", data=self.valid_form(odds_model="favorite"))
+        page = self.client.get("/betting").text
+        row = page.split('data-hide-for="favorite"')[1].split(">")[0]
+        self.assertIn("hidden", row)
+        self.assertIn('data-show-for="favorite" >', page.replace('data-show-for="favorite"  >', 'data-show-for="favorite" >'))
+        self.client.post("/betting/rules", data=self.valid_form(odds_model="ai"))
+        row = self.client.get("/betting").text.split('data-hide-for="favorite"')[1].split(">")[0]
+        self.assertNotIn("hidden", row)
+
+    def test_save_and_apply_to_todays_games(self):
+        self.sign_in()
+        self.assertIn('formaction="/betting/rules?apply_today=1"', self.client.get("/betting").text)
+        result = {"day": "2026-10-04", "games": 3, "placed": 1, "already": 1, "closed": 1, "failed": 0, "why": None}
+        with mock.patch.object(Betting, "rerun_today", return_value=result) as rerun:
+            r = self.client.post("/betting/rules?apply_today=1", data=self.valid_form(), follow_redirects=False)
+        rerun.assert_called_once()
+        self.assertEqual(self.rules()["min_edge"], 0.075)  # saved first
+        page = self.client.get(r.headers["location"]).text
+        self.assertIn("Rules saved and applied to today&#39;s 3 games: 1 new bet placed.", page.replace("'", "&#39;"))
+        with mock.patch.object(Betting, "rerun_today", return_value={**result, "why": "betting is off"}):
+            r = self.client.post("/betting/rules?apply_today=1", data=self.valid_form(), follow_redirects=True)
+        self.assertIn("Nothing applied to today", r.text)
 
     def test_saving_a_confidence_minimum(self):
         self.sign_in()

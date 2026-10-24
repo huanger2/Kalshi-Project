@@ -72,4 +72,31 @@
     document.addEventListener("input", fromForm);
     document.addEventListener("change", fromForm);
     form.addEventListener("submit", function () { saved = serialize(); });
+
+    // Odds to bet on: show only the explanation and the rows the chosen option uses.
+    // A hidden row stays in the form (its saved value is kept) but isn't required.
+    var oddsModel = document.getElementById("odds_model");
+    function applyOddsModel() {
+        if (!oddsModel) return;
+        var choice = oddsModel.value;
+        document.querySelectorAll("[data-show-for]").forEach(function (el) {
+            el.hidden = el.getAttribute("data-show-for") !== choice;
+        });
+        document.querySelectorAll("[data-hide-for]").forEach(function (el) {
+            var hide = el.getAttribute("data-hide-for").split(" ").indexOf(choice) !== -1;
+            el.hidden = hide;
+            el.querySelectorAll("input, select").forEach(function (input) {
+                if (hide) {
+                    if (input.required) input.setAttribute("data-was-required", "");
+                    input.required = false;
+                } else if (input.hasAttribute("data-was-required")) {
+                    input.required = true;
+                }
+            });
+        });
+    }
+    if (oddsModel) {
+        oddsModel.addEventListener("change", applyOddsModel);
+        applyOddsModel();
+    }
 })();

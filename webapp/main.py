@@ -84,6 +84,17 @@ def _static_version() -> int:
 
 
 templates.env.globals["static_version"] = _static_version
+
+
+def _num(value, places: int = 6) -> str:
+    """A number for an <input>: exact to `places` decimals, without float noise or trailing zeros (5, 12.5, 0.07)."""
+    if value is None:
+        return ""
+    text = f"{float(value):.{places}f}".rstrip("0").rstrip(".")
+    return "0" if text in ("", "-0") else text
+
+
+templates.env.filters["num"] = _num
 # For the nav's per-league tabs on every page. tracked_leagues is called
 # fresh each render, so a flipped switch shows up without a restart.
 templates.env.globals["league_codes"] = queries.LEAGUES
@@ -644,10 +655,12 @@ def remove_user(request: Request, user_id: int, conn: sqlite3.Connection = Depen
 
 def _render_betting(request: Request, conn: sqlite3.Connection, saved: Optional[str] = None,
                     errors: Optional[list] = None, status_code: int = 200, shown: Optional[str] = None,
-                    checked: Optional[str] = None):
+                    checked: Optional[str] = None, submitted: Optional[dict] = None,
+                    applied: Optional[str] = None):
     return templates.TemplateResponse(
         request, "betting.html",
-        {"b": betting.view(conn, request.state.user, shown), "message": betting.flash(saved), "checked": checked,
+        {"b": betting.view(conn, request.state.user, shown, submitted),
+         "message": applied or betting.flash(saved), "checked": checked,
          "errors": errors or [], "ai_names": DEFAULT_LLM_NAMES, "active_tab": "betting"},
         status_code=status_code,
     )
@@ -656,11 +669,15 @@ def _render_betting(request: Request, conn: sqlite3.Connection, saved: Optional[
 @app.get("/betting", response_class=HTMLResponse)
 def betting_page(request: Request, saved: Optional[str] = None, bets: Optional[str] = None,
                  checked: Optional[str] = None, settled: Optional[str] = None, failed: Optional[str] = None,
+                 placed: Optional[str] = None, games: Optional[str] = None, already: Optional[str] = None,
+                 closed: Optional[str] = None, unreached: Optional[str] = None, why: Optional[str] = None,
                  conn: sqlite3.Connection = Depends(get_db)):
     """`bets` picks which of the user's bets the page totals: paper, demo or live (default: the mode in effect)."""
     _require_user(request)
     return _render_betting(request, conn, saved=saved, shown=bets,
-                           checked=betting.check_flash(checked, settled, failed))
+                           checked=betting.check_flash(checked, settled, failed),
+                           applied=betting.applied_flash(placed, games, already, closed, unreached,
+                                                         why[:200] if why else None))
 
 
 @app.post("/betting/rules", response_class=HTMLResponse)
@@ -678,6 +695,7 @@ def save_betting_rules(
     leagues: list[str] = Form([]),
     segments: list[str] = Form([]),
     confirm_live: str = Form(""),
+    apply_today: Optional[str] = None,
     weight_openai: Optional[str] = Form(None, alias="weight::openai"),
     weight_claude: Optional[str] = Form(None, alias="weight::claude"),
     weight_gemini: Optional[str] = Form(None, alias="weight::gemini"),
@@ -693,7 +711,15 @@ def save_betting_rules(
     try:
         betting.save_config(conn, user["id"], form)
     except settings.SettingsError as e:
-        return _render_betting(request, conn, errors=e.errors, status_code=400)
+        # Keep what was typed on the page, so it can be fixed rather than retyped.
+        return _render_betting(request, conn, errors=e.errors, status_code=400, submitted=form)
+    if apply_today:
+        result = Betting.rerun_today(conn, user)
+        if result["why"]:
+            return RedirectResponse(f"/betting?why={quote(result['why'])}#rules", status_code=303)
+        return RedirectResponse(
+            f"/betting?placed={result['placed']}&games={result['games']}&already={result['already']}"
+            f"&closed={result['closed']}&unreached={result['failed']}#rules", status_code=303)
     return RedirectResponse("/betting?saved=rules#rules", status_code=303)
 
 

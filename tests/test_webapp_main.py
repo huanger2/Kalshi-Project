@@ -222,6 +222,14 @@ class LoginTests(WebAppTestCase):
         self.assertEqual(r.status_code, 401)
         self.assertIn("no accounts on this server yet", r.text)
 
+    def test_numbers_for_inputs_are_exact(self):
+        from webapp.main import _num
+        self.assertEqual(_num(0.07 * 100), "7")
+        self.assertEqual(_num(12.5), "12.5")
+        self.assertEqual(_num(123456.78), "123456.78")
+        self.assertEqual(_num(0.0), "0")
+        self.assertEqual(_num(None), "")
+
     def test_a_forged_cookie_is_not_trusted(self):
         self.sign_in()  # the account exists; the cookie just isn't signed by this server
         self.client.cookies.set(auth.COOKIE, "u.1.1.9999999999.deadbeef")

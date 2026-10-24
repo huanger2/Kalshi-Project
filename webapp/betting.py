@@ -187,7 +187,8 @@ def account(conn: sqlite3.Connection, user_id: int, mode: str) -> dict:
     return info
 
 
-def view(conn: sqlite3.Connection, user: dict, shown: Optional[str] = None) -> dict:
+def view(conn: sqlite3.Connection, user: dict, shown: Optional[str] = None,
+         submitted: Optional[Mapping] = None) -> dict:
     """
     Everything the Betting page shows `user`. `shown` picks which of their
     bets the totals and list cover ("paper", "demo" or "live"); by default
@@ -196,6 +197,7 @@ def view(conn: sqlite3.Connection, user: dict, shown: Optional[str] = None) -> d
     uid = user["id"]
     config = Betting.load_config(conn, uid)
     weights = AIWeights.for_user(conn, uid)
+    form_config, form_weights = sticky(config, weights, submitted) if submitted else (config, weights)
     with_bets = {row[0] for row in conn.execute("SELECT DISTINCT mode FROM bets WHERE user_id = ?", (uid,))}
     tabs = [m for m in Betting.MODES if m in with_bets or (m == config["mode"] and m != "off")]
     if shown not in tabs:
@@ -208,7 +210,7 @@ def view(conn: sqlite3.Connection, user: dict, shown: Optional[str] = None) -> d
         "SELECT COUNT(DISTINCT ticker) FROM predictions WHERE outcome IS NOT NULL"
     ).fetchone()[0]
     return {
-        "config": config,
+        "config": form_config,  # what the form shows: saved, or what was typed into a refused save
         "modes": Betting.MODES,
         "shown": shown,
         "tabs": tabs,
@@ -223,7 +225,7 @@ def view(conn: sqlite3.Connection, user: dict, shown: Optional[str] = None) -> d
         "breakdowns": breakdowns(bets),
         "backtest": backtest(conn, config, weights),
         "settled_games": settled_games,
-        "providers": [{"key": key, "name": name, "weight": weights.get(key, 1.0),
+        "providers": [{"key": key, "name": name, "weight": form_weights.get(key, 1.0),
                        "default": AIWeights.defaults().get(key, 1.0)} for key, name in PROVIDERS],
         "custom_weights": Accounts.get_setting(conn, uid, "ai_weights") is not None,
         "weights_brier": _brier(conn, config, weights),
@@ -384,6 +386,62 @@ def check_flash(checked: Optional[str], settled: Optional[str], failed: Optional
              f"{still} still in progress or unsettled."]
     if failed_n:
         parts.append(f"{failed_n} couldn't be reached; try again shortly.")
+    return " ".join(parts)
+
+
+def sticky(config: dict, weights: dict, form: Mapping) -> tuple[dict, dict]:
+    """
+    The rules and weights to show after a refused save: what was typed,
+    wherever it reads as a number (so it can be fixed rather than retyped),
+    else what's saved.
+    """
+    shown = dict(config)
+
+    def number(name, scale=1.0):
+        try:
+            return float(str(form.get(name, "")).strip()) / scale
+        except ValueError:
+            return None
+
+    for name, scale in (("min_edge", 100), ("min_price", 100), ("max_price", 100), ("min_confidence", 100),
+                        ("stake_usd", 1), ("max_daily_usd", 1), ("min_ais", 1)):
+        value = number(name, scale)
+        if value is not None:
+            shown[name] = int(value) if name == "min_ais" and value == int(value) else value
+    for name in ("mode", "odds_model"):
+        if form.get(name):
+            shown[name] = form[name]
+    for name in ("leagues", "segments"):
+        if name in form:
+            shown[name] = list(form.get(name) or [])
+    typed = dict(weights)
+    for key in list(weights):
+        value = number(f"weight::{key}")
+        if value is not None:
+            typed[key] = value
+    return shown, typed
+
+
+def applied_flash(placed: Optional[str], games: Optional[str], already: Optional[str], closed: Optional[str],
+                  failed: Optional[str], why: Optional[str]) -> Optional[str]:
+    """The message after "Save and apply to today's games" (from query parameters, so strings)."""
+    if why:
+        return f"Rules saved. Nothing applied to today's games: {why}."
+    if placed is None:
+        return None
+    try:
+        placed_n, games_n, already_n, closed_n, failed_n = (int(x or 0) for x in (placed, games, already, closed,
+                                                                                    failed))
+    except ValueError:
+        return None
+    parts = [f"Rules saved and applied to today's {games_n} game{'' if games_n == 1 else 's'}:",
+             f"{placed_n} new bet{'' if placed_n == 1 else 's'} placed."]
+    if already_n:
+        parts.append(f"{already_n} already had a bet (left as is).")
+    if closed_n:
+        parts.append(f"{closed_n} no longer trading.")
+    if failed_n:
+        parts.append(f"{failed_n} couldn't be reached on Kalshi.")
     return " ".join(parts)
 
 

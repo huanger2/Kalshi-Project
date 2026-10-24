@@ -96,32 +96,125 @@ def bettors(conn: sqlite3.Connection) -> list[dict]:
     Each is {"user_id", "username", "config", "weights", "creds"}.
     """
     import Accounts
-    import AIWeights
 
     found = []
     for user in Accounts.list_users(conn):
-        config = load_config(conn, user["id"])
-        mode = config["mode"]
-        if mode not in MODES or mode == "off":
-            continue
-        creds = None
-        if mode in TRADING_MODES:
-            try:
-                creds = Accounts.kalshi_credentials(conn, user["id"], mode)
-            except Exception as e:
-                print(f"no bets for {user['username']}: {e}")
-                continue
-            if creds is None:
-                print(f"no bets for {user['username']}: {mode} mode, but no Kalshi {mode} key saved")
-                continue
-        weights = AIWeights.for_user(conn, user["id"])
-        fair_model = None
-        if config.get("odds_model", "fair") == "fair":
-            import FairOdds
-            fair_model = FairOdds.model_for(conn, weights)
-        found.append({"user_id": user["id"], "username": user["username"], "config": config,
-                      "weights": weights, "creds": creds, "fair_model": fair_model})
+        bettor, why = bettor_for(conn, user)
+        if bettor is not None:
+            found.append(bettor)
+        elif why:
+            print(f"no bets for {user['username']}: {why}")
     return found
+
+
+def bettor_for(conn: sqlite3.Connection, user: dict) -> tuple[Optional[dict], Optional[str]]:
+    """
+    One user as a bettor (see bettors()), or (None, why not): None for
+    "betting is off", else what's missing.
+    """
+    import Accounts
+    import AIWeights
+
+    config = load_config(conn, user["id"])
+    mode = config["mode"]
+    if mode not in MODES or mode == "off":
+        return None, None
+    creds = None
+    if mode in TRADING_MODES:
+        try:
+            creds = Accounts.kalshi_credentials(conn, user["id"], mode)
+        except Exception as e:
+            return None, str(e)
+        if creds is None:
+            return None, f"{mode} mode, but no Kalshi {mode} key saved"
+    weights = AIWeights.for_user(conn, user["id"])
+    fair_model = None
+    if config.get("odds_model", "fair") == "fair":
+        import FairOdds
+        fair_model = FairOdds.model_for(conn, weights)
+    return {"user_id": user["id"], "username": user["username"], "config": config,
+            "weights": weights, "creds": creds, "fair_model": fair_model}, None
+
+
+# Kalshi market statuses that still take orders.
+OPEN_STATUSES = {"open", "active", "initialized"}
+
+
+def latest_games(conn: sqlite3.Connection, today: Optional[datetime.date] = None) -> tuple[Optional[str], list[dict]]:
+    """
+    The latest logged slate still unsettled -- today's games, normally --
+    as (game day, [{"ticker", "event_ticker", "team", "opponent",
+    "predictions"}]). A slate older than yesterday counts as none: those
+    games are over. (Yesterday counts because the server's date can run
+    ahead of the games' -- UTC on Railway.)
+    """
+    from EVCalculator import LLMPrediction
+
+    today = today or datetime.date.today()
+    day = conn.execute("SELECT MAX(game_date) FROM predictions WHERE outcome IS NULL").fetchone()[0]
+    if not day or day < (today - datetime.timedelta(days=1)).isoformat():
+        return None, []
+    games: dict[str, dict] = {}
+    for ticker, event, team, opponent, llm, prob, confidence in conn.execute(
+            "SELECT ticker, event_ticker, team, opponent, llm, predicted_prob, confidence FROM predictions "
+            "WHERE game_date = ? AND outcome IS NULL ORDER BY ticker, llm", (day,)):
+        game = games.setdefault(ticker, {"ticker": ticker, "event_ticker": event, "team": team,
+                                         "opponent": opponent, "predictions": []})
+        game["predictions"].append(LLMPrediction(llm, prob, confidence))
+    return day, list(games.values())
+
+
+def rerun_today(conn: sqlite3.Connection, user: dict, fetch_market=None,
+                today: Optional[datetime.date] = None) -> dict:
+    """
+    Apply a user's current rules to today's already-logged games now,
+    instead of waiting for tomorrow's run: each game's market is fetched
+    fresh from Kalshi (the price may have moved since it was logged), games
+    no longer trading are skipped, and bets go through candidate()/place()
+    exactly as in the daily run -- so a game already bet in this mode is
+    left alone, and the daily cap counts what's already been spent today.
+    The AIs aren't asked again.
+
+    Returns {"day", "games", "placed", "already", "closed", "failed", "why"}
+    ("why" is set when nothing could run, e.g. betting is off).
+    """
+    import Kalshi
+
+    result = {"day": None, "games": 0, "placed": 0, "already": 0, "closed": 0, "failed": 0, "why": None}
+    bettor, why = bettor_for(conn, user)
+    if bettor is None:
+        result["why"] = why or "betting is off"
+        return result
+    day, games = latest_games(conn, today)
+    result.update(day=day, games=len(games))
+    if not games:
+        result["why"] = "no unsettled games logged today"
+        return result
+    fetch_market = fetch_market or Kalshi.get_market
+    mode = bettor["config"]["mode"]
+    candidates = []
+    for game in games:
+        if conn.execute("SELECT 1 FROM bets WHERE ticker = ? AND mode = ? AND user_id = ?",
+                        (game["ticker"], mode, bettor["user_id"])).fetchone():
+            result["already"] += 1
+            continue
+        try:
+            market = fetch_market(game["ticker"])
+        except Exception as e:
+            print(f"could not fetch {game['ticker']} from Kalshi: {e}")
+            result["failed"] += 1
+            continue
+        if (market.get("status") or "open").lower() not in OPEN_STATUSES:
+            result["closed"] += 1
+            continue
+        bet = candidate(conn, bettor, {"ticker": game["ticker"], "event_ticker": game["event_ticker"],
+                                       "yes_sub_title": game["team"]},
+                        game["predictions"], Kalshi.get_prices(market), day, opponent=game["opponent"])
+        if bet:
+            candidates.append(bet)
+    if candidates:
+        result["placed"] = len(place(conn, bettor, candidates))
+    return result
 
 
 def fee(count: int, price: float) -> float:

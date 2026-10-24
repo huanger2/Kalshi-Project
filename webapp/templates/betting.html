@@ -138,34 +138,41 @@
                     <option value="favorite" {% if c.odds_model == "favorite" %}selected{% endif %}>Kalshi favorite: back the side Kalshi's price favors (no edge needed)</option>
                 </select>
                 {% set f = b.fair %}
-                <span class="muted default-hint">
-                    {% if c.odds_model == "favorite" %}Backs Kalshi's favorite in every game that passes the other rules;
-                        the minimum edge is ignored, and when the daily cap can't cover them all, the strongest
-                        favorites go first.
-                    {% elif f.trusts %}The model trusts the AIs' surprise &times;{{ "%.2f" | format(f.beta) }}{% if f.gamma %}
+                {# One explanation per choice; betting-preview.js shows the one picked, without saving. #}
+                <span class="muted default-hint" data-show-for="fair" {% if c.odds_model != "fair" %}hidden{% endif %}>
+                    {% if f.trusts %}The model trusts the AIs' surprise &times;{{ "%.2f" | format(f.beta) }}{% if f.gamma %}
                         (+{{ "%.2f" | format(f.gamma) }} per unit of confidence){% endif %}, learned from {{ f.games }} settled games.
                     {% elif f.games < f.min_games %}Fair odds equal Kalshi's price until {{ f.min_games }} games have settled
                         ({{ f.games }} so far), so no bets until then.
                     {% else %}On {{ f.games }} settled games the AIs haven't beaten Kalshi on held-out days, so fair odds
                         equal Kalshi's price and no bets are placed. That changes once they show skill.{% endif %}
                 </span>
+                <span class="muted default-hint" data-show-for="ai" {% if c.odds_model != "ai" %}hidden{% endif %}>
+                    Bets wherever the AI odds beat the ask by the minimum edge. The AIs' odds hug 50%, so most of these
+                    bets back underdogs.</span>
+                <span class="muted default-hint" data-show-for="favorite" {% if c.odds_model != "favorite" %}hidden{% endif %}>
+                    Backs Kalshi's favorite in every game that passes the other rules; the minimum edge doesn't apply,
+                    and when the daily cap can't cover them all, the strongest favorites go first.</span>
             </div>
-            <label for="min_edge">Minimum edge (points)</label>
-            <input id="min_edge" name="min_edge" type="number" step="0.5" min="0" max="50" value="{{ '%g' | format(c.min_edge * 100) }}" required>
+            {# Rows some choices don't use: hidden (not removed, so their saved value is kept) for those. #}
+            <div class="grid-row" data-hide-for="favorite" {% if c.odds_model == "favorite" %}hidden{% endif %}>
+                <label for="min_edge">Minimum edge (points)</label>
+                <input id="min_edge" name="min_edge" type="number" step="any" min="0" max="50" value="{{ (c.min_edge * 100) | num }}" required>
+            </div>
             <label for="stake_usd">Dollars per bet</label>
-            <input id="stake_usd" name="stake_usd" type="number" step="0.01" min="0.01" value="{{ '%g' | format(c.stake_usd) }}" required>
+            <input id="stake_usd" name="stake_usd" type="number" step="any" min="0.01" value="{{ c.stake_usd | num }}" required>
             <label for="max_daily_usd">Daily cap ($, incl. fees)</label>
-            <input id="max_daily_usd" name="max_daily_usd" type="number" step="0.01" min="0" value="{{ '%g' | format(c.max_daily_usd) }}" required>
+            <input id="max_daily_usd" name="max_daily_usd" type="number" step="any" min="0" value="{{ c.max_daily_usd | num }}" required>
             <label for="min_price">Lowest price (cents)</label>
-            <input id="min_price" name="min_price" type="number" step="1" min="0" max="99" value="{{ '%g' | format(c.min_price * 100) }}" required>
+            <input id="min_price" name="min_price" type="number" step="any" min="0" max="99" value="{{ (c.min_price * 100) | num }}" required>
             <label for="max_price">Highest price (cents)</label>
-            <input id="max_price" name="max_price" type="number" step="1" min="0" max="99" value="{{ '%g' | format(c.max_price * 100) }}" required>
+            <input id="max_price" name="max_price" type="number" step="any" min="0" max="99" value="{{ (c.max_price * 100) | num }}" required>
             <label for="min_ais">AIs that must answer</label>
             <input id="min_ais" name="min_ais" type="number" step="1" min="1" max="10" value="{{ c.min_ais }}" required>
             <label for="min_confidence">Minimum AI confidence (%)</label>
             <div>
-                <input id="min_confidence" name="min_confidence" type="number" step="1" min="0" max="100"
-                       value="{{ '%g' | format((c.min_confidence or 0) * 100) }}" required>
+                <input id="min_confidence" name="min_confidence" type="number" step="any" min="0" max="100"
+                       value="{{ ((c.min_confidence or 0) * 100) | num }}" required>
                 <span class="muted default-hint">No bet when the AIs' confidence, averaged by your AI weights, is under
                     this -- however big the edge. 0 turns it off.</span>
             </div>
@@ -185,6 +192,9 @@
 
         <div class="form-actions">
             <button type="submit" class="button inline primary">Save rules and weights</button>
+            <button type="submit" class="button inline" formaction="/betting/rules?apply_today=1"
+                    title="Save, then run these rules over today's logged games now, at Kalshi's current prices (games already bet are left as they are)">
+                Save and apply to today's games</button>
             <span class="preview-status" id="preview-status" role="status" aria-live="polite"></span>
         </div>
     </form>
@@ -226,9 +236,9 @@
         {% for p in b.providers %}
         <div class="weight-field">
             <label for="weight-{{ p.key }}">{{ p.name }}</label>
-            <input id="weight-{{ p.key }}" name="weight::{{ p.key }}" form="rules-form" type="number" step="0.05"
-                   min="0" max="10" value="{{ '%g' | format(p.weight) }}" required>
-            {% if p.weight != p.default %}<span class="muted default-hint">site default {{ '%g' | format(p.default) }}</span>{% endif %}
+            <input id="weight-{{ p.key }}" name="weight::{{ p.key }}" form="rules-form" type="number" step="any"
+                   min="0" max="10" value="{{ p.weight | num }}" required>
+            {% if p.weight != p.default %}<span class="muted default-hint">site default {{ p.default | num }}</span>{% endif %}
         </div>
         {% endfor %}
         <div class="weight-field weight-score">
