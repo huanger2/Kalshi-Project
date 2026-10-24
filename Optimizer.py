@@ -250,7 +250,8 @@ def simulate(games: list[dict], rules: dict) -> list[dict]:
     for g in games:
         no_ask = None if g["yes_bid"] is None else 1 - g["yes_bid"]
         bet, _ = Betting.decide(g["ai_prob"], g["ai_count"], g["yes_ask"], no_ask, g["league"], rules,
-                                segment=g["segment"], ai_confidence=g.get("ai_confidence"))
+                                segment=g["segment"], ai_confidence=g.get("ai_confidence"),
+                                market_prob=g.get("market_prob"))
         if bet:
             bets.append({**bet, "game_date": g["game_date"], **Betting.result(bet, g["outcome"], g["tied"])})
     kept, _ = Betting.apply_daily_cap(bets, rules["max_daily_usd"])

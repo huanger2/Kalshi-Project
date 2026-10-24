@@ -135,10 +135,14 @@
                 <select id="odds_model" name="odds_model" class="settings-select">
                     <option value="fair" {% if c.odds_model == "fair" %}selected{% endif %}>Fair odds: Kalshi's price, moved by the AIs' proven skill (recommended)</option>
                     <option value="ai" {% if c.odds_model == "ai" %}selected{% endif %}>Raw AI odds (lean heavily toward underdogs)</option>
+                    <option value="favorite" {% if c.odds_model == "favorite" %}selected{% endif %}>Kalshi favorite: back the side Kalshi's price favors (no edge needed)</option>
                 </select>
                 {% set f = b.fair %}
                 <span class="muted default-hint">
-                    {% if f.trusts %}The model trusts the AIs' surprise &times;{{ "%.2f" | format(f.beta) }}{% if f.gamma %}
+                    {% if c.odds_model == "favorite" %}Backs Kalshi's favorite in every game that passes the other rules;
+                        the minimum edge is ignored, and when the daily cap can't cover them all, the strongest
+                        favorites go first.
+                    {% elif f.trusts %}The model trusts the AIs' surprise &times;{{ "%.2f" | format(f.beta) }}{% if f.gamma %}
                         (+{{ "%.2f" | format(f.gamma) }} per unit of confidence){% endif %}, learned from {{ f.games }} settled games.
                     {% elif f.games < f.min_games %}Fair odds equal Kalshi's price until {{ f.min_games }} games have settled
                         ({{ f.games }} so far), so no bets until then.
@@ -203,6 +207,8 @@
         </tbody>
     </table>
     </div>
+    {% if c.odds_model == "favorite" %}<p class="note">Backing Kalshi's favorite ignores the minimum edge, so every row is
+        the same: it's how that strategy would have done.</p>{% endif %}
     <p class="note">A small sample swings a lot: treat a threshold that looks good over a few dozen games as a hint,
         not a result.</p>
     {% endif %}

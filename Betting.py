@@ -50,9 +50,12 @@ import Leagues
 
 BETTING_PATH = Path(__file__).with_name("betting.json")
 MODES = ["off", "paper", "demo", "live"]
-# Which probability bets are decided on: "fair" (FairOdds.py: Kalshi's price, moved only as far as the AIs'
-# surprise has earned) or "ai" (the raw AI odds, which hug 50% and so mostly back underdogs).
-ODDS_MODELS = ["fair", "ai"]
+# How a game's side is chosen:
+#   "fair"      the edge of fair odds (FairOdds.py: Kalshi's price, moved only as far as the AIs' surprise
+#               has earned) over the ask
+#   "ai"        the edge of the raw AI odds over the ask (they hug 50%, so this mostly backs underdogs)
+#   "favorite"  no edge at all: back whichever side Kalshi's price favors
+ODDS_MODELS = ["fair", "ai", "favorite"]
 TRADING_MODES = ["demo", "live"]  # the modes that send orders to Kalshi (Kalshi.TRADING_BASES)
 SEGMENTS = ["preseason", "regular", "postseason"]  # see SeasonType.segment()
 
@@ -136,6 +139,7 @@ def decide(
     config: dict,
     segment: Optional[str] = None,
     ai_confidence: Optional[float] = None,
+    market_prob: Optional[float] = None,
 ) -> tuple[Optional[dict], str]:
     """
     The bet the rules call for on one market, or None, plus a one-line reason.
@@ -147,6 +151,12 @@ def decide(
     there's no bet, however big the edge (None counts as under any minimum
     above 0).
 
+    With the rules' odds_model "favorite", the side is simply the one
+    Kalshi's price (`market_prob`, the YES midpoint) favors, at its ask; the
+    minimum edge doesn't apply (the favorite's ask is almost never below its
+    price), and the bet's "priority" for the daily cap is how strongly it's
+    favored. The AI rules (min_ais, min_confidence) still filter.
+
     Leaves out the daily cap and anything else that depends on bets already
     placed (see consider()), so the what-if backtest can reuse it as is.
 
@@ -157,12 +167,16 @@ def decide(
         return None, f"not betting on {league or 'unknown league'} games"
     if segment is not None and segment not in config["segments"]:
         return None, f"not betting on {segment} games"
-    if ai_prob is None or ai_count < config["min_ais"]:
+    favorite_mode = config.get("odds_model") == "favorite"
+    if (ai_prob is None and not favorite_mode) or ai_count < config["min_ais"]:
         return None, f"{ai_count} AI(s) answered, need {config['min_ais']}"
     min_confidence = config.get("min_confidence") or 0.0
     if min_confidence > 0 and (ai_confidence is None or ai_confidence < min_confidence):
         shown = "unknown" if ai_confidence is None else f"{ai_confidence:.0%}"
         return None, f"AI confidence {shown} is under {min_confidence:.0%}"
+
+    if favorite_mode:
+        return _back_the_favorite(market_prob, yes_ask, no_ask, ai_prob, config)
 
     sides = []
     for side, prob, price in (("yes", ai_prob, yes_ask), ("no", 1 - ai_prob, no_ask)):
@@ -185,6 +199,27 @@ def decide(
         "ai_prob": ai_prob,
     }
     return bet, f"{best['side'].upper()} x{count} at {best['price']:.2f}, edge {best['edge']:+.1%}"
+
+
+def _back_the_favorite(market_prob: Optional[float], yes_ask: Optional[float], no_ask: Optional[float],
+                       ai_prob: Optional[float], config: dict) -> tuple[Optional[dict], str]:
+    """decide() for odds_model "favorite": the side Kalshi's price favors, if it's priced within the range."""
+    if market_prob is None:
+        return None, "no Kalshi price to find the favorite from"
+    if market_prob == 0.5:
+        return None, "Kalshi has no favorite (50/50)"
+    side, prob, price = ("yes", market_prob, yes_ask) if market_prob > 0.5 else ("no", 1 - market_prob, no_ask)
+    if price is None:
+        return None, f"no ask for the favorite ({side.upper()})"
+    if not config["min_price"] <= price <= config["max_price"]:
+        return None, f"the favorite ({side.upper()}) is priced {price:.2f}, outside the allowed range"
+    count = math.floor(config["stake_usd"] / price + 1e-9)
+    if count < 1:
+        return None, f"${config['stake_usd']:.2f} doesn't cover one contract at {price:.2f}"
+    bet = {"side": side, "price": price, "edge": prob - price, "priority": prob, "count": count,
+           "cost": round(count * price, 4), "fee": fee(count, price),
+           "ai_prob": ai_prob if ai_prob is not None else market_prob}
+    return bet, f"{side.upper()} x{count} at {price:.2f}, Kalshi's favorite at {prob:.0%}"
 
 
 def result(bet: dict, outcome: Optional[int], tied: bool = False) -> dict:
@@ -229,7 +264,8 @@ def apply_daily_cap(
         by_day.setdefault(bet["game_date"], []).append(bet)
     for game_date, day_bets in by_day.items():
         spent = spent_for(game_date)
-        for bet in sorted(day_bets, key=lambda b: b["edge"], reverse=True):
+        # "priority" when the rules set one (the favorite's strength), else the edge.
+        for bet in sorted(day_bets, key=lambda b: b.get("priority", b["edge"]), reverse=True):
             outlay = bet["cost"] + bet["fee"]
             if spent + outlay > cap + 1e-9:
                 skipped.append(bet)
@@ -280,15 +316,18 @@ def candidate(
     weights = {p.llm_name: AIWeights.lookup(bettor["weights"], p.llm_name) for p in predictions}
     ai_prob = consensus_probability(predictions, weights)
     ai_confidence = consensus_confidence(predictions, weights)
+    bid, ask = prices.get("yes_bid"), prices.get("yes_ask")
+    market_prob = (bid + ask) / 2 if bid is not None and ask is not None else (ask if ask is not None else bid)
     model_prob = ai_prob
     if config.get("odds_model", "fair") == "fair":
         import FairOdds
         model = bettor.get("fair_model") or FairOdds.Model()  # no model: no trust, fair odds = Kalshi
-        bid, ask = prices.get("yes_bid"), prices.get("yes_ask")
-        market_prob = (bid + ask) / 2 if bid is not None and ask is not None else (ask if ask is not None else bid)
         model_prob = model.fair(market_prob, ai_prob, ai_confidence)
+    elif config.get("odds_model") == "favorite":
+        model_prob = market_prob
     bet, reason = decide(model_prob, len(predictions), prices.get("yes_ask"), prices.get("no_ask"), league, config,
-                         segment=SeasonType.segment_iso(game_date, league), ai_confidence=ai_confidence)
+                         segment=SeasonType.segment_iso(game_date, league), ai_confidence=ai_confidence,
+                         market_prob=market_prob)
     if bet is None:
         print(f"no bet for {bettor['username']} on {ticker}: {reason}")
         return None

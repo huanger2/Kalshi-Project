@@ -139,6 +139,43 @@ class DecideTests(unittest.TestCase):
         self.assertIsNotNone(Betting.decide(0.70, 3, 0.60, 0.42, "NBA", rules)[0])  # no game date: rule skipped
 
 
+class FavoriteTests(unittest.TestCase):
+    """odds_model "favorite": back the side Kalshi's price favors, no edge needed."""
+
+    RULES = {**RULES, "odds_model": "favorite", "min_edge": 0.10}
+
+    def decide(self, market_prob, yes_ask, no_ask, ai_prob=0.5, **rules):
+        return Betting.decide(ai_prob, 3, yes_ask, no_ask, "NBA", {**self.RULES, **rules}, ai_confidence=0.8,
+                              market_prob=market_prob)
+
+    def test_backs_the_favorite_whatever_the_ais_say(self):
+        bet, reason = self.decide(0.70, yes_ask=0.71, no_ask=0.31, ai_prob=0.40)  # the AIs prefer the underdog
+        self.assertEqual((bet["side"], bet["price"]), ("yes", 0.71))
+        self.assertIn("Kalshi's favorite at 70%", reason)
+        bet, _ = self.decide(0.25, yes_ask=0.26, no_ask=0.76)
+        self.assertEqual((bet["side"], bet["price"]), ("no", 0.76))
+
+    def test_the_minimum_edge_doesnt_apply_but_the_price_range_does(self):
+        self.assertIsNotNone(self.decide(0.70, yes_ask=0.71, no_ask=0.31))  # edge -1 point, minimum 10
+        bet, reason = self.decide(0.95, yes_ask=0.96, no_ask=0.06)
+        self.assertIsNone(bet)
+        self.assertIn("outside the allowed range", reason)
+
+    def test_no_favorite_no_bet(self):
+        self.assertIsNone(self.decide(0.50, yes_ask=0.51, no_ask=0.51)[0])
+        self.assertIsNone(self.decide(None, yes_ask=0.51, no_ask=0.51)[0])
+
+    def test_the_ai_rules_still_filter(self):
+        self.assertIsNone(self.decide(0.70, yes_ask=0.71, no_ask=0.31, min_confidence=0.9)[0])
+
+    def test_the_daily_cap_goes_to_the_strongest_favorites(self):
+        strong, _ = self.decide(0.85, yes_ask=0.86, no_ask=0.16)
+        mild, _ = self.decide(0.60, yes_ask=0.61, no_ask=0.41)
+        bets = [{**mild, "game_date": "d"}, {**strong, "game_date": "d"}]
+        kept, _ = Betting.apply_daily_cap(bets, strong["cost"] + strong["fee"])
+        self.assertEqual([b["price"] for b in kept], [0.86])
+
+
 class DailyCapTests(unittest.TestCase):
     @staticmethod
     def bet(name, edge, outlay, day="2026-10-04"):
@@ -306,6 +343,18 @@ class DailyRunBettingTests(DailyLogTestCase):
             result = betting.check_bets(conn, self.uid, mock.Mock(side_effect=OSError("timed out")))
             self.assertEqual(result, {"checked": 1, "settled": 0, "failed": 1})
             self.assertEqual([b["status"] for b in betting.list_bets(conn, self.uid)], ["pending"])
+        finally:
+            conn.close()
+
+    def test_backing_the_kalshi_favorite_in_the_daily_run(self):
+        # Denver: Kalshi bid 60 / ask 62, so Denver (YES) is the favorite at 61%.
+        self.set_rules(odds_model="favorite", min_edge=0.5)
+        self.run_day(OCT4, TODAY_MARKETS[:2])
+        rows = self.bets()
+        self.assertEqual([(r[0], r[2], r[3]) for r in rows], [("KXNBAGAME-26OCT04UTADEN-DEN", "yes", 0.62)])
+        conn = Tracker.connect(self.db_path)
+        try:
+            self.assertAlmostEqual(conn.execute("SELECT model_prob FROM bets").fetchone()[0], 0.61)
         finally:
             conn.close()
 
@@ -704,9 +753,12 @@ class BettingPageTests(BettingConfigTestCase):
         self.assertIn("Fair odds:", page)
         self.client.post("/betting/rules", data=self.valid_form(odds_model="fair"))
         self.assertEqual(self.rules()["odds_model"], "fair")
+        self.client.post("/betting/rules", data=self.valid_form(odds_model="favorite"))
+        self.assertEqual(self.rules()["odds_model"], "favorite")
+        self.assertIn("ignores the minimum edge", self.client.get("/betting").text)
         r = self.client.post("/betting/rules", data=self.valid_form(odds_model="vibes"))
         self.assertEqual(r.status_code, 400)
-        self.assertEqual(self.rules()["odds_model"], "fair")
+        self.assertEqual(self.rules()["odds_model"], "favorite")
 
     def test_the_what_if_table_on_untrained_fair_odds_places_nothing(self):
         # GAMES are 3 settled games: far too few to trust the AIs, so fair odds are Kalshi's price.
