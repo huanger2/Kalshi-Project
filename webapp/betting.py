@@ -26,8 +26,10 @@ from webapp import queries
 from webapp.settings import MAX_WEIGHT, PROVIDERS, SettingsError, _number
 
 BACKTEST_EDGES = [0.0, 0.02, 0.04, 0.06, 0.08, 0.10, 0.15, 0.20]
-EDGE_BUCKETS = [(0.0, 0.05, "Under 5 pts"), (0.05, 0.10, "5-10 pts"), (0.10, 0.15, "10-15 pts"),
-                (0.15, float("inf"), "15+ pts")]
+# Every edge falls in exactly one: Kalshi-favorite bets usually have a slightly negative one (the favorite's
+# ask is a little over its price), so the first bucket is open below.
+EDGE_BUCKETS = [(float("-inf"), 0.0, "Negative"), (0.0, 0.05, "Under 5 pts"), (0.05, 0.10, "5-10 pts"),
+                (0.10, 0.15, "10-15 pts"), (0.15, float("inf"), "15+ pts")]
 
 
 def _confidence_from_predictions(conn: sqlite3.Connection, ticker: str, weights: dict) -> Optional[float]:
@@ -100,7 +102,8 @@ def breakdowns(bets: list[dict]) -> list[dict]:
         return {"title": title, "rows": rows}
 
     def bucket(bet):
-        return next(label for low, high, label in EDGE_BUCKETS if low <= bet["edge"] < high)
+        edge = bet["edge"] if bet["edge"] is not None else 0.0
+        return next((label for low, high, label in EDGE_BUCKETS if low <= edge < high), EDGE_BUCKETS[-1][2])
 
     return [
         group("League", lambda b: b["league"], list(Leagues.LEAGUES)),

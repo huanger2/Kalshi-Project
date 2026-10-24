@@ -719,6 +719,21 @@ class BettingViewTests(BettingConfigTestCase):
         rows = betting.backtest(self.conn, {**RULES, "segments": ["regular", "postseason"]})  # GAMES are preseason
         self.assertEqual({r["bets"] for r in rows}, {0})
 
+    def test_breakdowns_take_negative_edges(self):
+        # Kalshi-favorite bets: the favorite's ask is usually a little over its price. Used to crash the page.
+        bets = [{"league": "NBA", "side": "yes", "edge": edge, "cost": 4.0, "fee": 0.1, "status": "won", "pnl": 1.0}
+                for edge in (-0.012, 0.0, 0.07, 0.4)]
+        groups = {g["title"]: g["rows"] for g in betting.breakdowns(bets)}
+        self.assertEqual([r["label"] for r in groups["Edge when placed"]],
+                         ["Negative", "Under 5 pts", "5-10 pts", "15+ pts"])
+
+    def test_the_page_shows_with_a_kalshi_favorite_bet(self):
+        self.conn.execute("UPDATE bets SET edge = -0.012")
+        self.conn.commit()
+        user = Accounts.get_user(self.conn, self.uid)
+        with mock.patch("builtins.print"):
+            self.assertEqual(betting.view(self.conn, user)["breakdowns"][2]["rows"][0]["label"], "Negative")
+
     def test_breakdowns_group_by_league_side_and_edge(self):
         groups = {g["title"]: g["rows"] for g in betting.breakdowns(betting.list_bets(self.conn, self.uid))}
         self.assertEqual([r["label"] for r in groups["League"]], ["NBA"])
