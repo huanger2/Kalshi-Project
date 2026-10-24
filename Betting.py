@@ -468,9 +468,13 @@ def place(conn: sqlite3.Connection, bettor: dict, candidates: list[dict],
         candidates, config["max_daily_usd"],
         lambda game_date: spent_on(conn, bettor["user_id"], game_date, config["mode"])
     )
+    unfunded = fund(bettor["creds"], [bet for bet in kept if bet["mode"] in TRADING_MODES])
     placed = []
     for bet in kept:
         if bet["mode"] in TRADING_MODES:
+            if bet["ticker"] in unfunded:
+                outcomes[bet["ticker"]] = unfunded[bet["ticker"]]
+                continue
             sent, problem = send(bet, bettor["creds"])
             if sent is None:
                 outcomes[bet["ticker"]] = problem
@@ -519,23 +523,44 @@ def record_balance(conn: sqlite3.Connection, user_id: int, mode: str, balance: f
     return True
 
 
+def fund(creds, bets: list[dict]) -> dict[str, str]:
+    """
+    Put enough cash on each Kalshi exchange shard for `bets` (demo/live
+    orders about to be sent): one balance check and at most one transfer per
+    shard for the whole batch, rather than per order -- Kalshi rate-limits
+    the API. Returns {ticker: why not} for bets whose shard couldn't be
+    funded (or whose shard couldn't be looked up); they shouldn't be sent.
+    """
+    import Kalshi
+
+    problems: dict[str, str] = {}
+    by_shard: dict[int, list[dict]] = {}
+    for bet in bets:
+        try:
+            by_shard.setdefault(Kalshi.market_shard(bet["ticker"]), []).append(bet)
+        except Exception as e:
+            problems[bet["ticker"]] = f"couldn't look the market up on Kalshi: {e}"
+    for shard, shard_bets in by_shard.items():
+        try:
+            Kalshi.fund_shard(creds, shard, sum(b["cost"] + b["fee"] for b in shard_bets))
+        except Exception as e:
+            print(f"couldn't fund Kalshi exchange shard {shard}: {e}")
+            for bet in shard_bets:
+                problems[bet["ticker"]] = f"couldn't fund the order on Kalshi: {e}"
+    return problems
+
+
 def send(bet: dict, creds) -> tuple[Optional[dict], Optional[str]]:
     """
     Send a demo/live bet to Kalshi with `creds` (the user's key) as an
-    immediate-or-cancel buy at its price or better, first moving cash onto
-    the market's exchange shard if it's short there. Returns (the bet as
+    immediate-or-cancel buy at its price or better. (Its exchange shard is
+    funded first, for the whole batch -- see fund().) Returns (the bet as
     filled -- count, price, cost, fee and edge from the fill, plus order_id
     -- None), or (None, why) if nothing filled or Kalshi refused; either way
     the run goes on to the next bet.
     """
     import Kalshi
 
-    # The market's exchange shard needs the cash on it (see Kalshi.fund_shard()).
-    try:
-        Kalshi.fund_shard(creds, Kalshi.market_shard(bet["ticker"]), bet["cost"] + bet["fee"])
-    except Exception as e:
-        print(f"{bet['mode']} order on {bet['ticker']} not sent: {e}")
-        return None, f"couldn't fund the order on Kalshi: {e}"
     try:
         fill = Kalshi.buy(bet["ticker"], bet["side"], bet["count"], bet["price"], creds)
     except Exception as e:

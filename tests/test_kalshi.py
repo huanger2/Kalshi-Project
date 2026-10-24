@@ -277,6 +277,37 @@ class TradingTests(unittest.TestCase):
                 Kalshi.buy("T", "yes", 3, 0.5, LIVE)
 
 
+class RateLimitTests(unittest.TestCase):
+    """Kalshi's HTTP 429 too_many_requests: wait and retry instead of failing."""
+
+    def response(self, status, body=None, retry_after=None):
+        r = mock.Mock(status_code=status, headers={"Retry-After": retry_after} if retry_after else {})
+        r.json.return_value = body or {}
+        return r
+
+    def setUp(self):
+        for patcher in (mock.patch.object(Kalshi, "get_auth_headers", return_value={"KALSHI-ACCESS-KEY": "k"}),
+                        mock.patch.object(Kalshi, "_sleep")):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_retries_after_the_wait_kalshi_asks_for(self):
+        replies = [self.response(429, {"error": {"code": "too_many_requests"}}, retry_after="2"),
+                   self.response(200, {"balance_dollars": "12.0000"})]
+        with mock.patch("requests.request", side_effect=replies) as request:
+            self.assertEqual(Kalshi.get_balance(DEMO), 12.0)
+        self.assertEqual(request.call_count, 2)
+        Kalshi._sleep.assert_called_once_with(2.0)
+
+    def test_backs_off_then_gives_up(self):
+        limited = self.response(429, {"error": {"code": "too_many_requests"}})
+        with mock.patch("requests.request", return_value=limited) as request:
+            with self.assertRaisesRegex(Kalshi.TradingError, "429"):
+                Kalshi.get_balance(DEMO)
+        self.assertEqual(request.call_count, Kalshi.RATE_LIMIT_RETRIES + 1)
+        self.assertEqual([c.args[0] for c in Kalshi._sleep.call_args_list], [1.0, 2.0, 4.0, 8.0])
+
+
 class ShardTests(unittest.TestCase):
     """Cash has to be on a market's exchange shard before an API order (Kalshi's exchange sharding)."""
 
@@ -338,11 +369,28 @@ class ShardTests(unittest.TestCase):
         with self.assertRaisesRegex(Kalshi.TradingError, "hadn't arrived"):
             Kalshi.fund_shard(LIVE, 3, 5.0, sleep=lambda s: None, wait_seconds=3)
 
-    def test_a_markets_shard_comes_from_the_market(self):
-        with mock.patch.object(Kalshi, "get_market", return_value={"ticker": "T", "exchange_index": 3}):
-            self.assertEqual(Kalshi.market_shard("T"), 3)
-        with mock.patch.object(Kalshi, "get_market", return_value={"ticker": "T"}):
-            self.assertEqual(Kalshi.market_shard("T"), 0)
+    def test_a_markets_shard_comes_from_the_market_and_is_remembered(self):
+        Kalshi._market_shards.clear()
+        with mock.patch.object(Kalshi, "get_market", return_value={"ticker": "A", "exchange_index": 3}) as get:
+            self.assertEqual(Kalshi.market_shard("A"), 3)
+            self.assertEqual(Kalshi.market_shard("A"), 3)
+        self.assertEqual(get.call_count, 1)  # looked up once
+        with mock.patch.object(Kalshi, "get_market", return_value={"ticker": "B"}):
+            self.assertEqual(Kalshi.market_shard("B"), 0)
+
+    def test_waiting_for_a_transfer_checks_less_and_less_often(self):
+        pauses = []
+        original = Kalshi._trade_request.side_effect
+
+        def slow(method, endpoint, creds, body=None):
+            if endpoint == "/portfolio/intra_exchange_instance_transfer":
+                return {"transfer_id": "t1"}  # never lands
+            return original(method, endpoint, creds, body)
+
+        Kalshi._trade_request.side_effect = slow
+        with self.assertRaises(Kalshi.TradingError):
+            Kalshi.fund_shard(LIVE, 3, 5.0, sleep=pauses.append, wait_seconds=15)
+        self.assertEqual(pauses, [1.0, 2.0, 3.0, 4.0, 5.0])  # five balance checks in 15s, not fifteen
 
 
 class ImportSideEffectTests(unittest.TestCase):

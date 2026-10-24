@@ -143,16 +143,39 @@ def get_auth_headers(method, path, creds: Credentials):
     return sign_request(creds.private_key, method, path, key_id=creds.key_id)
 
 
+# Kalshi rate-limits the API (HTTP 429 "too_many_requests"). A refused call
+# is retried after the wait Kalshi asks for (Retry-After), else after 1, 2,
+# 4, 8 seconds -- safe for orders too: a 429 means Kalshi didn't take it, and
+# each order carries a client_order_id. _sleep is swapped out in tests.
+RATE_LIMIT_RETRIES = 4
+_sleep = time.sleep
+
+
+def _retry_wait(response, attempt: int) -> float:
+    try:
+        return min(30.0, max(0.5, float(response.headers.get("Retry-After"))))
+    except (TypeError, ValueError):
+        return float(2 ** attempt)
+
+
 def _trade_request(method: str, endpoint: str, creds: Credentials, body: Optional[dict] = None) -> dict:
-    """An authenticated call to the exchange `creds` are for. Raises TradingError with Kalshi's message on a refusal."""
+    """
+    An authenticated call to the exchange `creds` are for. Raises
+    TradingError with Kalshi's message on a refusal; rate-limited calls are
+    retried first (see RATE_LIMIT_RETRIES).
+    """
     if creds is None:
         raise TradingError("no Kalshi key saved")
     if creds.env not in TRADING_BASES:
         raise TradingError(f"unknown Kalshi environment {creds.env!r}")
     url = TRADING_BASES[creds.env] + endpoint
-    # Kalshi signs the full path from the root: /trade-api/v2/portfolio/...
-    headers = get_auth_headers(method, urlparse(url).path, creds)
-    response = requests.request(method, url, headers=headers, json=body, timeout=30)
+    for attempt in range(RATE_LIMIT_RETRIES + 1):
+        # Signed fresh each try: the signature covers a timestamp. The full path from the root is signed.
+        headers = get_auth_headers(method, urlparse(url).path, creds)
+        response = requests.request(method, url, headers=headers, json=body, timeout=30)
+        if response.status_code != 429 or attempt == RATE_LIMIT_RETRIES:
+            break
+        _sleep(_retry_wait(response, attempt))
     if response.status_code >= 400:
         try:
             detail = response.json().get("error") or response.json()
@@ -186,9 +209,14 @@ def get_balance(creds: Credentials) -> float:
 SHARD_WAIT_SECONDS = 15  # transfers between shards are asynchronous
 
 
+_market_shards: dict[str, int] = {}
+
+
 def market_shard(ticker: str) -> int:
-    """The exchange shard a market trades on (0 when Kalshi doesn't say)."""
-    return int(get_market(ticker).get("exchange_index") or 0)
+    """The exchange shard a market trades on (0 when Kalshi doesn't say). Remembered: live markets don't move."""
+    if ticker not in _market_shards:
+        _market_shards[ticker] = int(get_market(ticker).get("exchange_index") or 0)
+    return _market_shards[ticker]
 
 
 def shard_balances(creds: Credentials) -> dict[int, float]:
@@ -233,12 +261,15 @@ def fund_shard(creds: Credentials, shard: int, needed: float, sleep=time.sleep,
         raise TradingError(f"not enough cash: the order needs ${needed:.2f} on Kalshi's exchange shard {shard}, "
                            f"which has ${have:.2f}, with ${elsewhere:.2f} on the others")
     transfer_between_shards(creds, shortfall, donors[0][1], shard)
-    waited = 0.0
+    # Check after 1s, then 2s, 3s... later: a handful of balance calls, not one a second.
+    waited, pause = 0.0, 1.0
     while waited < wait_seconds:
-        sleep(1.0)
-        waited += 1.0
+        pause = min(pause, wait_seconds - waited)
+        sleep(pause)
+        waited += pause
         if shard_balances(creds).get(shard, 0.0) >= needed:
             return shortfall
+        pause += 1.0
     raise TradingError(f"moved ${shortfall:.2f} to Kalshi's exchange shard {shard}, but it hadn't arrived after "
                        f"{int(wait_seconds)}s; the next run will use it")
 

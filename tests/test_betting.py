@@ -429,6 +429,19 @@ class DailyRunBettingTests(DailyLogTestCase):
             conn.close()
         self.assertEqual(result["outcomes"][0]["outcome"], "couldn't fund the order on Kalshi: not enough cash")
 
+    def test_a_batch_of_orders_funds_each_shard_once(self):
+        conn = Tracker.connect(self.db_path)
+        try:
+            bettor = self.bettor(conn, mode="demo")
+            bets = [{"ticker": t, "cost": 4.0, "fee": 0.1} for t in ("A", "B", "C")]
+            shards = {"A": 3, "B": 3, "C": 0}
+            with mock.patch.object(Kalshi, "market_shard", side_effect=shards.get),                  mock.patch.object(Kalshi, "fund_shard") as fund:
+                self.assertEqual(Betting.fund(bettor["creds"], bets), {})
+        finally:
+            conn.close()
+        funded = sorted((c.args[1], round(c.args[2], 2)) for c in fund.call_args_list)
+        self.assertEqual(funded, [(0, 4.1), (3, 8.2)])  # one call per shard, for that shard's whole outlay
+
     def test_an_order_is_funded_on_its_markets_shard_first(self):
         self.set_rules(mode="demo", min_edge=0.02)
         fill = {"order_id": "o", "count": 8, "price": 0.62, "cost": 4.96, "fee": 0.13}
@@ -758,6 +771,7 @@ class BettingPageTests(BettingConfigTestCase):
         app.dependency_overrides[get_db] = override_get_db
         self.addCleanup(app.dependency_overrides.pop, get_db, None)
         os.environ.pop("SESSION_SECRET", None)
+        betting._balances.clear()  # each test's mocked balance, not one remembered from another test
         self.client = TestClient(app)
 
     def sign_in(self, username="admin", password="s3cret"):
@@ -1070,6 +1084,18 @@ class BettingPageTests(BettingConfigTestCase):
         page = self.client.get("/betting").text
         self.assertIn('href="/settings#kalshi"', page)
         self.assertIn("no Kalshi demo key saved", page)
+
+    def test_the_balance_is_reused_briefly_instead_of_asked_for_every_time(self):
+        conn = Tracker.connect(self.db_path)
+        try:
+            with mock.patch.object(Accounts, "kalshi_credentials", side_effect=fake_credentials),                  mock.patch("Kalshi.get_balance", return_value=99.0) as balance:
+                self.assertEqual(betting.account(conn, self.uid, "demo", now=1000.0)["balance"], 99.0)
+                self.assertEqual(betting.account(conn, self.uid, "demo", now=1020.0)["balance"], 99.0)
+                self.assertEqual(balance.call_count, 1)
+                betting.account(conn, self.uid, "demo", now=1000.0 + betting.BALANCE_TTL + 1)
+                self.assertEqual(balance.call_count, 2)
+        finally:
+            conn.close()
 
     def test_a_balance_failure_is_shown_not_raised(self):
         _set_rules(self.db_path, self.uid, {**RULES, "mode": "live"})

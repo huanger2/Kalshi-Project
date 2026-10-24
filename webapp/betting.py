@@ -173,8 +173,17 @@ def balance_series(conn: sqlite3.Connection, user_id: int, mode: str, bets: list
     return {"kind": "pnl", "points": points}
 
 
-def account(conn: sqlite3.Connection, user_id: int, mode: str) -> dict:
+# The Betting tab's balance, per (user, mode): {key: (fetched at, balance)}. Reused for BALANCE_TTL seconds,
+# so refreshing the page doesn't spend Kalshi's API rate limit.
+BALANCE_TTL = 30.0
+_balances: dict[tuple, tuple[float, float]] = {}
+
+
+def account(conn: sqlite3.Connection, user_id: int, mode: str, now=None) -> dict:
     """The user's Kalshi account a demo/live mode bets from: whether a key is saved, and its cash balance."""
+    import time
+
+    now = time.time() if now is None else now
     info = {"mode": mode, "credentials": False, "balance": None, "error": None}
     try:
         creds = Accounts.kalshi_credentials(conn, user_id, mode)
@@ -183,8 +192,14 @@ def account(conn: sqlite3.Connection, user_id: int, mode: str) -> dict:
         return info
     info["credentials"] = creds is not None
     if creds is not None:
+        key = (user_id, mode, creds.key_id)
+        cached = _balances.get(key)
+        if cached and now - cached[0] < BALANCE_TTL:
+            info["balance"] = cached[1]
+            return info
         try:
             info["balance"] = Kalshi.get_balance(creds)
+            _balances[key] = (now, info["balance"])
         except Exception as e:
             info["error"] = str(e)
     return info
