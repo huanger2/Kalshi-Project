@@ -337,6 +337,11 @@ td.confidence { font-weight: 600; font-variant-numeric: tabular-nums; }
 .preview-status { font-size: 0.82rem; color: var(--muted); }
 /* A label + field pair that can be hidden as one, while still laying out in .settings-grid's columns. */
 .grid-row { display: contents; }
+.apply-result p { margin: 0 0 0.35rem; }
+.apply-result .apply-hint { color: var(--text); }
+.apply-result details { margin-top: 0.25rem; }
+.apply-result summary { cursor: pointer; }
+.apply-result ul { margin: 0.4rem 0 0; padding-left: 1.2rem; }
 .grid-row[hidden], [data-show-for][hidden] { display: none; }
 .preview-status.error { color: var(--lost); }
 #backtest-rows.loading { opacity: 0.55; transition: opacity 0.15s; }

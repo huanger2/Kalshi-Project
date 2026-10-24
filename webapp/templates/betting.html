@@ -108,6 +108,18 @@
         <a href="#backtest">What if?</a> numbers follow your edits (and your <a href="#weights">AI weights</a>) as you
         type, before you save.</p>
     {% if message %}<p class="form-message" role="status">{{ message }}</p>{% endif %}
+    {% if applied %}
+        <div class="form-message apply-result" role="status">
+            <p>{{ applied.message }}</p>
+            {% if applied.hint %}<p class="apply-hint">{{ applied.hint }}</p>{% endif %}
+            {% if applied.games %}
+            <details {% if not applied.placed %}open{% endif %}>
+                <summary>What happened to each game</summary>
+                <ul>{% for g in applied.games %}<li><strong>{{ g.game }}</strong>: {{ g.outcome }}</li>{% endfor %}</ul>
+            </details>
+            {% endif %}
+        </div>
+    {% endif %}
     {% for e in errors %}{% if loop.first %}<div class="form-error" role="alert">Nothing was saved:<ul>{% endif %}
         <li>{{ e }}</li>{% if loop.last %}</ul></div>{% endif %}{% endfor %}
     <p class="note">

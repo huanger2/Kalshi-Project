@@ -175,45 +175,61 @@ def rerun_today(conn: sqlite3.Connection, user: dict, fetch_market=None,
     left alone, and the daily cap counts what's already been spent today.
     The AIs aren't asked again.
 
-    Returns {"day", "games", "placed", "already", "closed", "failed", "why"}
-    ("why" is set when nothing could run, e.g. betting is off).
+    Returns {"day", "games", "placed", "already", "closed", "failed", "why",
+    "odds_model", "trusts_ais", "outcomes"}: "why" is set when nothing could
+    run (e.g. betting is off); "outcomes" is [{"game", "ticker", "outcome"}]
+    -- what happened to each game, bet or not, in words.
     """
     import Kalshi
 
-    result = {"day": None, "games": 0, "placed": 0, "already": 0, "closed": 0, "failed": 0, "why": None}
+    result = {"day": None, "games": 0, "placed": 0, "already": 0, "closed": 0, "failed": 0, "why": None,
+              "odds_model": None, "trusts_ais": None, "outcomes": []}
     bettor, why = bettor_for(conn, user)
     if bettor is None:
         result["why"] = why or "betting is off"
         return result
     day, games = latest_games(conn, today)
-    result.update(day=day, games=len(games))
+    odds_model = bettor["config"].get("odds_model", "fair")
+    result.update(day=day, games=len(games), odds_model=odds_model,
+                  trusts_ais=bettor["fair_model"].trusts_ais if bettor.get("fair_model") else None)
     if not games:
         result["why"] = "no unsettled games logged today"
         return result
     fetch_market = fetch_market or Kalshi.get_market
     mode = bettor["config"]["mode"]
     candidates = []
+    outcomes: dict[str, str] = {}
     for game in games:
+        ticker = game["ticker"]
         if conn.execute("SELECT 1 FROM bets WHERE ticker = ? AND mode = ? AND user_id = ?",
-                        (game["ticker"], mode, bettor["user_id"])).fetchone():
+                        (ticker, mode, bettor["user_id"])).fetchone():
             result["already"] += 1
+            outcomes[ticker] = f"already bet in {mode} mode (left as it is)"
             continue
         try:
-            market = fetch_market(game["ticker"])
+            market = fetch_market(ticker)
         except Exception as e:
-            print(f"could not fetch {game['ticker']} from Kalshi: {e}")
+            print(f"could not fetch {ticker} from Kalshi: {e}")
             result["failed"] += 1
+            outcomes[ticker] = f"couldn't reach Kalshi: {e}"
             continue
-        if (market.get("status") or "open").lower() not in OPEN_STATUSES:
+        status = (market.get("status") or "open").lower()
+        if status not in OPEN_STATUSES:
             result["closed"] += 1
+            outcomes[ticker] = f"market no longer trading ({status})"
             continue
-        bet = candidate(conn, bettor, {"ticker": game["ticker"], "event_ticker": game["event_ticker"],
+        why: list = []
+        bet = candidate(conn, bettor, {"ticker": ticker, "event_ticker": game["event_ticker"],
                                        "yes_sub_title": game["team"]},
-                        game["predictions"], Kalshi.get_prices(market), day, opponent=game["opponent"])
+                        game["predictions"], Kalshi.get_prices(market), day, opponent=game["opponent"], why=why)
         if bet:
             candidates.append(bet)
+        else:
+            outcomes[ticker] = "no bet: " + (why[0] if why else "the rules didn't call for one")
     if candidates:
-        result["placed"] = len(place(conn, bettor, candidates))
+        result["placed"] = len(place(conn, bettor, candidates, outcomes))
+    result["outcomes"] = [{"ticker": g["ticker"], "game": f"{g['team']} vs {g['opponent'] or '?'}",
+                           "outcome": outcomes.get(g["ticker"], "")} for g in games]
     return result
 
 
@@ -376,10 +392,11 @@ def candidate(
     prices: dict,
     game_date: str,
     opponent: Optional[str] = None,
+    why: Optional[list] = None,
 ) -> Optional[dict]:
     """
     The bet one user's rules call for on a market the daily run just
-    logged, or None. Not placed yet: place() decides which candidates fit
+    logged, or None (and, given a `why` list, the reason appended to it). Not placed yet: place() decides which candidates fit
     that user's daily cap.
 
     Args:
@@ -403,7 +420,9 @@ def candidate(
     ticker = market["ticker"]
     if conn.execute("SELECT 1 FROM bets WHERE ticker = ? AND mode = ? AND user_id = ?",
                     (ticker, mode, bettor["user_id"])).fetchone():
-        return None  # already bet on this market
+        if why is not None:
+            why.append(f"already bet in {mode} mode")
+        return None
 
     league = Leagues.league_for_ticker(ticker)
     weights = {p.llm_name: AIWeights.lookup(bettor["weights"], p.llm_name) for p in predictions}
@@ -423,6 +442,8 @@ def candidate(
                          market_prob=market_prob)
     if bet is None:
         print(f"no bet for {bettor['username']} on {ticker}: {reason}")
+        if why is not None:
+            why.append(reason)
         return None
     # The bet keeps both: the raw AI odds, and the probability it was decided on.
     bet = {**bet, "ai_prob": ai_prob, "model_prob": model_prob}
@@ -431,14 +452,17 @@ def candidate(
             "team": market.get("yes_sub_title"), "opponent": opponent, "reason": reason}
 
 
-def place(conn: sqlite3.Connection, bettor: dict, candidates: list[dict]) -> list[dict]:
+def place(conn: sqlite3.Connection, bettor: dict, candidates: list[dict],
+          outcomes: Optional[dict] = None) -> list[dict]:
     """
     Place one user's candidates that fit under each day's cap, biggest edge
     first (see apply_daily_cap()), counting bets earlier runs already placed
     that day. Paper bets are just recorded; demo/live ones are sent to
     Kalshi with the user's key first (see send()), and only what fills is
-    recorded. Returns the bets placed.
+    recorded. Returns the bets placed; given an `outcomes` dict, also
+    records {ticker: what happened} for every candidate.
     """
+    outcomes = outcomes if outcomes is not None else {}
     config = bettor["config"]
     kept, skipped = apply_daily_cap(
         candidates, config["max_daily_usd"],
@@ -447,9 +471,11 @@ def place(conn: sqlite3.Connection, bettor: dict, candidates: list[dict]) -> lis
     placed = []
     for bet in kept:
         if bet["mode"] in TRADING_MODES:
-            bet = send(bet, bettor["creds"])
-            if bet is None:
+            sent, problem = send(bet, bettor["creds"])
+            if sent is None:
+                outcomes[bet["ticker"]] = problem
                 continue
+            bet = sent
         conn.execute(
             "INSERT INTO bets (created_at, user_id, mode, ticker, event_ticker, league, game_date, team, opponent, "
             " side, price, count, cost, fee, ai_prob, edge, order_id, ai_confidence, model_prob) "
@@ -463,8 +489,10 @@ def place(conn: sqlite3.Connection, bettor: dict, candidates: list[dict]) -> lis
         # on a later one mustn't lose the record of this one.
         conn.commit()
         placed.append(bet)
+        outcomes[bet["ticker"]] = f"bet placed: {bet['reason']}"
         print(f"{bet['mode']} bet for {bettor['username']} on {bet['ticker']}: {bet['reason']}")
     for bet in skipped:
+        outcomes[bet["ticker"]] = f"qualified, but the ${config['max_daily_usd']:.2f} daily cap went to bigger edges"
         print(f"no bet for {bettor['username']} on {bet['ticker']}: {bet['reason']}, but the "
               f"${config['max_daily_usd']:.2f} daily cap went to bigger edges")
     return placed
@@ -491,13 +519,13 @@ def record_balance(conn: sqlite3.Connection, user_id: int, mode: str, balance: f
     return True
 
 
-def send(bet: dict, creds) -> Optional[dict]:
+def send(bet: dict, creds) -> tuple[Optional[dict], Optional[str]]:
     """
     Send a demo/live bet to Kalshi with `creds` (the user's key) as an
-    immediate-or-cancel buy at its price or better. Returns the bet as
-    filled (count, price, cost, fee and edge from the fill, plus order_id),
-    or None if nothing filled or Kalshi refused -- either way the run goes
-    on to the next bet.
+    immediate-or-cancel buy at its price or better. Returns (the bet as
+    filled -- count, price, cost, fee and edge from the fill, plus order_id
+    -- None), or (None, why) if nothing filled or Kalshi refused; either way
+    the run goes on to the next bet.
     """
     import Kalshi
 
@@ -505,15 +533,16 @@ def send(bet: dict, creds) -> Optional[dict]:
         fill = Kalshi.buy(bet["ticker"], bet["side"], bet["count"], bet["price"], creds)
     except Exception as e:
         print(f"{bet['mode']} order on {bet['ticker']} failed: {e}")
-        return None
+        return None, f"Kalshi refused the {bet['mode']} order: {e}"
     if not fill["count"]:
-        print(f"no {bet['mode']} bet on {bet['ticker']}: nothing on offer at {bet['price']:.2f} or better any more")
-        return None
+        why = f"nothing on offer at {bet['price']:.2f} or better any more, so the order didn't fill"
+        print(f"no {bet['mode']} bet on {bet['ticker']}: {why}")
+        return None, why
     decided_on = bet.get("model_prob", bet["ai_prob"])
     side_prob = decided_on if bet["side"] == "yes" else 1 - decided_on
     reason = (f"{bet['side'].upper()} x{fill['count']} at {fill['price']:.2f}, edge {side_prob - fill['price']:+.1%}"
               f" (order {fill['order_id']})")
-    return {**bet, **fill, "edge": side_prob - fill["price"], "reason": reason}
+    return {**bet, **fill, "edge": side_prob - fill["price"], "reason": reason}, None
 
 
 def consider(conn: sqlite3.Connection, bettor: dict, market: dict, predictions: list, prices: dict,

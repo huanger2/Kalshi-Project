@@ -379,6 +379,51 @@ class DailyRunBettingTests(DailyLogTestCase):
         self.assertEqual((again["placed"], again["already"]), (0, 1))
         self.assertEqual([b[0] for b in self.bets()], ["KXNBAGAME-26OCT04UTADEN-DEN"])
 
+    def test_applying_explains_every_game(self):
+        self.set_rules(min_edge=0.10)
+        self.run_day(OCT4, TODAY_MARKETS[:2])
+        conn = Tracker.connect(self.db_path)
+        try:
+            user = Accounts.get_user(conn, self.uid)
+            with mock.patch("builtins.print"):
+                result = Betting.rerun_today(conn, user, fetch_market=self.open_market, today=OCT4)
+        finally:
+            conn.close()
+        self.assertEqual(result["placed"], 0)
+        self.assertEqual([o["game"] for o in result["outcomes"]], ["Denver vs Utah"])
+        self.assertIn("no bet: best edge", result["outcomes"][0]["outcome"])
+        self.assertIn("is under 10.0%", result["outcomes"][0]["outcome"])
+
+    def test_a_refused_live_order_is_explained(self):
+        self.set_rules(min_edge=0.10)
+        self.run_day(OCT4, TODAY_MARKETS[:2])
+        self.set_rules(mode="live", min_edge=0.02)
+        conn = Tracker.connect(self.db_path)
+        try:
+            user = Accounts.get_user(conn, self.uid)
+            with mock.patch("Kalshi.buy", side_effect=RuntimeError("HTTP 401 unauthorized")), \
+                 mock.patch("builtins.print"):
+                result = Betting.rerun_today(conn, user, fetch_market=self.open_market, today=OCT4)
+        finally:
+            conn.close()
+        self.assertEqual(result["placed"], 0)
+        self.assertEqual(result["outcomes"][0]["outcome"], "Kalshi refused the live order: HTTP 401 unauthorized")
+        self.assertEqual(self.bets(), [])
+
+    def test_an_order_with_nothing_at_the_price_is_explained(self):
+        self.set_rules(min_edge=0.10)
+        self.run_day(OCT4, TODAY_MARKETS[:2])
+        self.set_rules(mode="demo", min_edge=0.02)
+        nothing = {"order_id": "o", "count": 0, "price": 0.62, "cost": 0.0, "fee": 0.0}
+        conn = Tracker.connect(self.db_path)
+        try:
+            user = Accounts.get_user(conn, self.uid)
+            with mock.patch("Kalshi.buy", return_value=nothing), mock.patch("builtins.print"):
+                result = Betting.rerun_today(conn, user, fetch_market=self.open_market, today=OCT4)
+        finally:
+            conn.close()
+        self.assertIn("didn't fill", result["outcomes"][0]["outcome"])
+
     def test_applying_skips_closed_and_unreachable_markets(self):
         self.set_rules(min_edge=0.10)
         self.run_day(OCT4, TODAY_MARKETS[:2])
@@ -860,16 +905,35 @@ class BettingPageTests(BettingConfigTestCase):
     def test_save_and_apply_to_todays_games(self):
         self.sign_in()
         self.assertIn('formaction="/betting/rules?apply_today=1"', self.client.get("/betting").text)
-        result = {"day": "2026-10-04", "games": 3, "placed": 1, "already": 1, "closed": 1, "failed": 0, "why": None}
+        result = {"day": "2026-10-04", "games": 3, "placed": 1, "already": 1, "closed": 1, "failed": 0, "why": None,
+                  "odds_model": "ai", "trusts_ais": None,
+                  "outcomes": [{"ticker": "A", "game": "Denver vs Utah", "outcome": "bet placed: YES x8 at 0.62"},
+                               {"ticker": "B", "game": "Boston vs Miami", "outcome": "already bet in paper mode"},
+                               {"ticker": "C", "game": "Dallas vs Houston", "outcome": "market no longer trading (closed)"}]}
         with mock.patch.object(Betting, "rerun_today", return_value=result) as rerun:
             r = self.client.post("/betting/rules?apply_today=1", data=self.valid_form(), follow_redirects=False)
         rerun.assert_called_once()
         self.assertEqual(self.rules()["min_edge"], 0.075)  # saved first
         page = self.client.get(r.headers["location"]).text
-        self.assertIn("Rules saved and applied to today&#39;s 3 games: 1 new bet placed.", page.replace("'", "&#39;"))
+        self.assertIn("applied to today", page)
+        self.assertIn("(2026-10-04): 1 new bet placed.", page)
+        for line in ("<strong>Denver vs Utah</strong>: bet placed", "<strong>Dallas vs Houston</strong>: market no longer"):
+            self.assertIn(line, page)
         with mock.patch.object(Betting, "rerun_today", return_value={**result, "why": "betting is off"}):
             r = self.client.post("/betting/rules?apply_today=1", data=self.valid_form(), follow_redirects=True)
         self.assertIn("Nothing applied to today", r.text)
+
+    def test_no_bets_on_untrained_fair_odds_says_why_and_what_to_do(self):
+        self.sign_in()
+        result = {"day": "2026-10-04", "games": 2, "placed": 0, "already": 0, "closed": 0, "failed": 0, "why": None,
+                  "odds_model": "fair", "trusts_ais": False,
+                  "outcomes": [{"ticker": "A", "game": "Denver vs Utah",
+                                "outcome": "no bet: best edge -1.0% (YES) is under 5.0%"}]}
+        with mock.patch.object(Betting, "rerun_today", return_value=result):
+            r = self.client.post("/betting/rules?apply_today=1", data=self.valid_form(), follow_redirects=True)
+        self.assertIn("doesn&#39;t trust the AIs yet", r.text)
+        self.assertIn("choose Raw AI odds or Kalshi favorite", r.text)
+        self.assertIn("best edge -1.0% (YES) is under 5.0%", r.text)
 
     def test_saving_a_confidence_minimum(self):
         self.sign_in()

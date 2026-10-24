@@ -422,27 +422,34 @@ def sticky(config: dict, weights: dict, form: Mapping) -> tuple[dict, dict]:
     return shown, typed
 
 
-def applied_flash(placed: Optional[str], games: Optional[str], already: Optional[str], closed: Optional[str],
-                  failed: Optional[str], why: Optional[str]) -> Optional[str]:
-    """The message after "Save and apply to today's games" (from query parameters, so strings)."""
-    if why:
-        return f"Rules saved. Nothing applied to today's games: {why}."
-    if placed is None:
+APPLY_SETTING = "last_apply"
+
+
+def apply_today(conn: sqlite3.Connection, user: dict) -> dict:
+    """Run Betting.rerun_today() and keep its result with the user, for the page to show after the redirect."""
+    result = Betting.rerun_today(conn, user)
+    Accounts.set_setting(conn, user["id"], APPLY_SETTING, result)
+    return result
+
+
+def applied_view(conn: sqlite3.Connection, user_id: int) -> Optional[dict]:
+    """The last "Save and apply to today's games" as a message, a hint and a per-game list, for the page."""
+    result = Accounts.get_setting(conn, user_id, APPLY_SETTING)
+    if not result:
         return None
-    try:
-        placed_n, games_n, already_n, closed_n, failed_n = (int(x or 0) for x in (placed, games, already, closed,
-                                                                                    failed))
-    except ValueError:
-        return None
-    parts = [f"Rules saved and applied to today's {games_n} game{'' if games_n == 1 else 's'}:",
-             f"{placed_n} new bet{'' if placed_n == 1 else 's'} placed."]
-    if already_n:
-        parts.append(f"{already_n} already had a bet (left as is).")
-    if closed_n:
-        parts.append(f"{closed_n} no longer trading.")
-    if failed_n:
-        parts.append(f"{failed_n} couldn't be reached on Kalshi.")
-    return " ".join(parts)
+    if result.get("why"):
+        return {"message": f"Rules saved. Nothing applied to today's games: {result['why']}.", "games": [],
+                "hint": None, "placed": 0}
+    games_n, placed_n = result["games"], result["placed"]
+    message = (f"Rules saved and applied to today's {games_n} game{'' if games_n == 1 else 's'} "
+               f"({result['day']}): {placed_n} new bet{'' if placed_n == 1 else 's'} placed.")
+    hint = None
+    if not placed_n and result.get("odds_model") == "fair" and result.get("trusts_ais") is False:
+        hint = ("You're betting on fair odds, and the fair-odds model doesn't trust the AIs yet, so fair odds equal "
+                "Kalshi's price and no game shows an edge. That's deliberate until the AIs prove themselves; to bet "
+                "now, choose Raw AI odds or Kalshi favorite under Odds to bet on.")
+    # The per-game list starts open when nothing was placed: then the reasons are the point.
+    return {"message": message, "games": result.get("outcomes") or [], "hint": hint, "placed": placed_n}
 
 
 def flash(saved: Optional[str]) -> Optional[str]:

@@ -656,11 +656,11 @@ def remove_user(request: Request, user_id: int, conn: sqlite3.Connection = Depen
 def _render_betting(request: Request, conn: sqlite3.Connection, saved: Optional[str] = None,
                     errors: Optional[list] = None, status_code: int = 200, shown: Optional[str] = None,
                     checked: Optional[str] = None, submitted: Optional[dict] = None,
-                    applied: Optional[str] = None):
+                    applied: Optional[dict] = None):
     return templates.TemplateResponse(
         request, "betting.html",
         {"b": betting.view(conn, request.state.user, shown, submitted),
-         "message": applied or betting.flash(saved), "checked": checked,
+         "message": betting.flash(saved), "applied": applied, "checked": checked,
          "errors": errors or [], "ai_names": DEFAULT_LLM_NAMES, "active_tab": "betting"},
         status_code=status_code,
     )
@@ -669,15 +669,12 @@ def _render_betting(request: Request, conn: sqlite3.Connection, saved: Optional[
 @app.get("/betting", response_class=HTMLResponse)
 def betting_page(request: Request, saved: Optional[str] = None, bets: Optional[str] = None,
                  checked: Optional[str] = None, settled: Optional[str] = None, failed: Optional[str] = None,
-                 placed: Optional[str] = None, games: Optional[str] = None, already: Optional[str] = None,
-                 closed: Optional[str] = None, unreached: Optional[str] = None, why: Optional[str] = None,
-                 conn: sqlite3.Connection = Depends(get_db)):
+                 applied: Optional[str] = None, conn: sqlite3.Connection = Depends(get_db)):
     """`bets` picks which of the user's bets the page totals: paper, demo or live (default: the mode in effect)."""
     _require_user(request)
     return _render_betting(request, conn, saved=saved, shown=bets,
                            checked=betting.check_flash(checked, settled, failed),
-                           applied=betting.applied_flash(placed, games, already, closed, unreached,
-                                                         why[:200] if why else None))
+                           applied=betting.applied_view(conn, request.state.user["id"]) if applied else None)
 
 
 @app.post("/betting/rules", response_class=HTMLResponse)
@@ -714,12 +711,8 @@ def save_betting_rules(
         # Keep what was typed on the page, so it can be fixed rather than retyped.
         return _render_betting(request, conn, errors=e.errors, status_code=400, submitted=form)
     if apply_today:
-        result = Betting.rerun_today(conn, user)
-        if result["why"]:
-            return RedirectResponse(f"/betting?why={quote(result['why'])}#rules", status_code=303)
-        return RedirectResponse(
-            f"/betting?placed={result['placed']}&games={result['games']}&already={result['already']}"
-            f"&closed={result['closed']}&unreached={result['failed']}#rules", status_code=303)
+        betting.apply_today(conn, user)
+        return RedirectResponse("/betting?applied=1#rules", status_code=303)
     return RedirectResponse("/betting?saved=rules#rules", status_code=303)
 
 
