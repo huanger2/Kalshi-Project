@@ -163,8 +163,9 @@
                     Bets wherever the AI odds beat the ask by the minimum edge. The AIs' odds hug 50%, so most of these
                     bets back underdogs.</span>
                 <span class="muted default-hint" data-show-for="favorite" {% if c.odds_model != "favorite" %}hidden{% endif %}>
-                    Backs Kalshi's favorite in every game that passes the other rules; the minimum edge doesn't apply,
-                    and when the daily cap can't cover them all, the strongest favorites go first.</span>
+                    Backs Kalshi's favorite in every game in your price range, leagues and parts of the season. The
+                    AIs play no part, so the minimum edge and the AI rules don't apply; when the daily cap can't cover
+                    them all, the strongest favorites go first.</span>
             </div>
             {# Rows some choices don't use: hidden (not removed, so their saved value is kept) for those. #}
             <div class="grid-row" data-hide-for="favorite" {% if c.odds_model == "favorite" %}hidden{% endif %}>
@@ -179,14 +180,18 @@
             <input id="min_price" name="min_price" type="number" step="any" min="0" max="99" value="{{ (c.min_price * 100) | num }}" required>
             <label for="max_price">Highest price (cents)</label>
             <input id="max_price" name="max_price" type="number" step="any" min="0" max="99" value="{{ (c.max_price * 100) | num }}" required>
-            <label for="min_ais">AIs that must answer</label>
-            <input id="min_ais" name="min_ais" type="number" step="1" min="1" max="10" value="{{ c.min_ais }}" required>
-            <label for="min_confidence">Minimum AI confidence (%)</label>
-            <div>
-                <input id="min_confidence" name="min_confidence" type="number" step="any" min="0" max="100"
-                       value="{{ ((c.min_confidence or 0) * 100) | num }}" required>
-                <span class="muted default-hint">No bet when the AIs' confidence, averaged by your AI weights, is under
-                    this -- however big the edge. 0 turns it off.</span>
+            <div class="grid-row" data-hide-for="favorite" {% if c.odds_model == "favorite" %}hidden{% endif %}>
+                <label for="min_ais">AIs that must answer</label>
+                <input id="min_ais" name="min_ais" type="number" step="1" min="1" max="10" value="{{ c.min_ais }}" required>
+            </div>
+            <div class="grid-row" data-hide-for="favorite" {% if c.odds_model == "favorite" %}hidden{% endif %}>
+                <label for="min_confidence">Minimum AI confidence (%)</label>
+                <div>
+                    <input id="min_confidence" name="min_confidence" type="number" step="any" min="0" max="100"
+                           value="{{ ((c.min_confidence or 0) * 100) | num }}" required>
+                    <span class="muted default-hint">No bet when the AIs' confidence, averaged by your AI weights, is under
+                        this -- however big the edge. 0 turns it off.</span>
+                </div>
             </div>
             <span class="settings-label">Leagues</span>
             <div class="checkbox-row">
@@ -229,8 +234,8 @@
         </tbody>
     </table>
     </div>
-    {% if c.odds_model == "favorite" %}<p class="note">Backing Kalshi's favorite ignores the minimum edge, so every row is
-        the same: it's how that strategy would have done.</p>{% endif %}
+    {% if c.odds_model == "favorite" %}<p class="note">Backing Kalshi's favorite ignores the minimum edge (and the AIs), so
+        every row is the same: it's how that strategy would have done.</p>{% endif %}
     <p class="note">A small sample swings a lot: treat a threshold that looks good over a few dozen games as a hint,
         not a result.</p>
     {% endif %}

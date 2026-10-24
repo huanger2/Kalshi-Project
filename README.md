@@ -346,9 +346,10 @@ It never inverts the AIs' view, and until they show skill, fair odds *are*
 Kalshi's price, so no bets are placed. The Betting tab says where the model
 stands, and the Analytics tab shows its held-out scores. "Raw AI odds" is
 still a choice under the rules, and so is **Kalshi favorite**: back the side
-Kalshi's price favors in every game that passes the other rules (price range,
-leagues, seasons, AIs required, minimum confidence), ignoring the minimum
-edge. When the daily cap can't cover them all, the strongest favorites go
+Kalshi's price favors in every game in your price range, leagues and parts of
+the season. The AIs play no part, so the minimum edge and the AI rules (AIs
+that must answer, minimum confidence) don't apply, and are hidden while it's
+chosen. When the daily cap can't cover them all, the strongest favorites go
 first.
 
 A demo or live bet is an immediate-or-cancel limit order at the price the

@@ -54,7 +54,7 @@ MODES = ["off", "paper", "demo", "live"]
 #   "fair"      the edge of fair odds (FairOdds.py: Kalshi's price, moved only as far as the AIs' surprise
 #               has earned) over the ask
 #   "ai"        the edge of the raw AI odds over the ask (they hug 50%, so this mostly backs underdogs)
-#   "favorite"  no edge at all: back whichever side Kalshi's price favors
+#   "favorite"  no edge at all, and no AI rules: back whichever side Kalshi's price favors
 ODDS_MODELS = ["fair", "ai", "favorite"]
 TRADING_MODES = ["demo", "live"]  # the modes that send orders to Kalshi (Kalshi.TRADING_BASES)
 SEGMENTS = ["preseason", "regular", "postseason"]  # see SeasonType.segment()
@@ -264,7 +264,8 @@ def decide(
     Kalshi's price (`market_prob`, the YES midpoint) favors, at its ask; the
     minimum edge doesn't apply (the favorite's ask is almost never below its
     price), and the bet's "priority" for the daily cap is how strongly it's
-    favored. The AI rules (min_ais, min_confidence) still filter.
+    favored. The AIs play no part: the minimum edge, the AIs that must answer
+    and the minimum AI confidence are all ignored.
 
     Leaves out the daily cap and anything else that depends on bets already
     placed (see consider()), so the what-if backtest can reuse it as is.
@@ -276,16 +277,15 @@ def decide(
         return None, f"not betting on {league or 'unknown league'} games"
     if segment is not None and segment not in config["segments"]:
         return None, f"not betting on {segment} games"
-    favorite_mode = config.get("odds_model") == "favorite"
-    if (ai_prob is None and not favorite_mode) or ai_count < config["min_ais"]:
+    if config.get("odds_model") == "favorite":
+        # Following the market: no AI rule applies.
+        return _back_the_favorite(market_prob, yes_ask, no_ask, ai_prob, config)
+    if ai_prob is None or ai_count < config["min_ais"]:
         return None, f"{ai_count} AI(s) answered, need {config['min_ais']}"
     min_confidence = config.get("min_confidence") or 0.0
     if min_confidence > 0 and (ai_confidence is None or ai_confidence < min_confidence):
         shown = "unknown" if ai_confidence is None else f"{ai_confidence:.0%}"
         return None, f"AI confidence {shown} is under {min_confidence:.0%}"
-
-    if favorite_mode:
-        return _back_the_favorite(market_prob, yes_ask, no_ask, ai_prob, config)
 
     sides = []
     for side, prob, price in (("yes", ai_prob, yes_ask), ("no", 1 - ai_prob, no_ask)):

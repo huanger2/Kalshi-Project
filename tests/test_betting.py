@@ -165,8 +165,11 @@ class FavoriteTests(unittest.TestCase):
         self.assertIsNone(self.decide(0.50, yes_ask=0.51, no_ask=0.51)[0])
         self.assertIsNone(self.decide(None, yes_ask=0.51, no_ask=0.51)[0])
 
-    def test_the_ai_rules_still_filter(self):
-        self.assertIsNone(self.decide(0.70, yes_ask=0.71, no_ask=0.31, min_confidence=0.9)[0])
+    def test_the_ai_rules_dont_apply(self):
+        # Following the market: however unsure the AIs, or however few answered, the favorite gets the bet.
+        self.assertIsNotNone(self.decide(0.70, yes_ask=0.71, no_ask=0.31, min_confidence=0.9)[0])
+        bet, _ = Betting.decide(None, 0, 0.71, 0.31, "NBA", {**self.RULES, "min_ais": 3}, market_prob=0.70)
+        self.assertEqual(bet["side"], "yes")
 
     def test_the_daily_cap_goes_to_the_strongest_favorites(self):
         strong, _ = self.decide(0.85, yes_ask=0.86, no_ask=0.16)
@@ -891,12 +894,15 @@ class BettingPageTests(BettingConfigTestCase):
             self.assertIn(shown, r.text)
         self.assertEqual(self.rules()["stake_usd"], 5.0)  # nothing saved
 
-    def test_kalshi_favorite_hides_the_minimum_edge(self):
+    def test_kalshi_favorite_hides_the_minimum_edge_and_the_ai_rules(self):
         self.sign_in()
         self.client.post("/betting/rules", data=self.valid_form(odds_model="favorite"))
         page = self.client.get("/betting").text
-        row = page.split('data-hide-for="favorite"')[1].split(">")[0]
-        self.assertIn("hidden", row)
+        rows = page.split('data-hide-for="favorite"')[1:]
+        self.assertEqual(len(rows), 3)  # minimum edge, AIs that must answer, minimum AI confidence
+        for row, field in zip(rows, ('id="min_edge"', 'id="min_ais"', 'id="min_confidence"')):
+            self.assertIn("hidden", row.split(">")[0])
+            self.assertIn(field, row.split("</div>")[0])
         self.assertIn('data-show-for="favorite" >', page.replace('data-show-for="favorite"  >', 'data-show-for="favorite" >'))
         self.client.post("/betting/rules", data=self.valid_form(odds_model="ai"))
         row = self.client.get("/betting").text.split('data-hide-for="favorite"')[1].split(">")[0]
