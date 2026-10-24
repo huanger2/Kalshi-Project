@@ -247,7 +247,17 @@
 {% endif %}
 
 <section class="panel" id="bets">
-    <h2>Bets</h2>
+    <div class="panel-head">
+        <h2>Bets</h2>
+        {% if s.pending %}
+        <form method="post" action="/betting/check">
+            <input type="hidden" name="bets" value="{{ b.shown }}">
+            <button type="submit" class="button inline" title="Ask Kalshi now whether your pending bets' games have finished">
+                Check bets ({{ s.pending }} pending)</button>
+        </form>
+        {% endif %}
+    </div>
+    {% if checked %}<p class="form-message" role="status">{{ checked }}</p>{% endif %}
     {% if not s.bets %}
         <p class="empty">No {{ mode_names[b.shown] | lower }} bets yet{% if c.mode == b.shown %} -- the next daily run places them{% endif %}.</p>
     {% else %}

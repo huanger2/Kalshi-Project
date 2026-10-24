@@ -283,10 +283,30 @@ def fill_results(
     (see Tracker.settle()) so the webapp's accuracy numbers stay in sync with
     the spreadsheet. A failure there is printed, not raised -- the result
     still belongs in the spreadsheet even if the database write fails.
+
+    A game predictions.db already has a result for (settled since, e.g. by
+    the Betting tab's "Check bets") is filled in from there, without asking
+    Kalshi again; only games with no known result are looked up.
     """
     fetch_results = fetch_results or get_results
     pending = df["winner"].isna() & (df["game_date"] < today.isoformat())
     settled = 0
+    if db_conn is not None and pending.any():
+        known = Tracker.known_outcomes(db_conn, list(df.loc[pending, "ticker"].dropna()))
+        for idx in df[pending].index:
+            outcome = known.get(df.at[idx, "ticker"])
+            if outcome is None:
+                continue
+            yes_won, tied = outcome
+            if tied:
+                winner = "Tie"
+            else:
+                winner = df.at[idx, "team"] if yes_won else df.at[idx, "opponent"]
+            df.at[idx, "winner"] = winner
+            df.at[idx, "team_won"] = int(bool(yes_won) and not tied)
+            df.at[idx, "settled_at"] = _now()
+            settled += 1
+        pending = df["winner"].isna() & (df["game_date"] < today.isoformat())
     for (day, league), group in df[pending].groupby(["game_date", "league"]):
         results = {r["event_ticker"]: r for r in fetch_results(datetime.date.fromisoformat(day), league)}
         for idx in group.index:

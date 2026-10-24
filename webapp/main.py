@@ -28,6 +28,7 @@ from fastapi.templating import Jinja2Templates
 
 import Accounts
 import AIWeights
+import Betting
 import CostTracker
 import Leagues
 import Tracker
@@ -633,10 +634,11 @@ def remove_user(request: Request, user_id: int, conn: sqlite3.Connection = Depen
 # --- Betting tab: the signed-in user's own rules and bets (see webapp/betting.py) ---
 
 def _render_betting(request: Request, conn: sqlite3.Connection, saved: Optional[str] = None,
-                    errors: Optional[list] = None, status_code: int = 200, shown: Optional[str] = None):
+                    errors: Optional[list] = None, status_code: int = 200, shown: Optional[str] = None,
+                    checked: Optional[str] = None):
     return templates.TemplateResponse(
         request, "betting.html",
-        {"b": betting.view(conn, request.state.user, shown), "message": betting.flash(saved),
+        {"b": betting.view(conn, request.state.user, shown), "message": betting.flash(saved), "checked": checked,
          "errors": errors or [], "ai_names": DEFAULT_LLM_NAMES, "active_tab": "betting"},
         status_code=status_code,
     )
@@ -644,10 +646,12 @@ def _render_betting(request: Request, conn: sqlite3.Connection, saved: Optional[
 
 @app.get("/betting", response_class=HTMLResponse)
 def betting_page(request: Request, saved: Optional[str] = None, bets: Optional[str] = None,
+                 checked: Optional[str] = None, settled: Optional[str] = None, failed: Optional[str] = None,
                  conn: sqlite3.Connection = Depends(get_db)):
     """`bets` picks which of the user's bets the page totals: paper, demo or live (default: the mode in effect)."""
     _require_user(request)
-    return _render_betting(request, conn, saved=saved, shown=bets)
+    return _render_betting(request, conn, saved=saved, shown=bets,
+                           checked=betting.check_flash(checked, settled, failed))
 
 
 @app.post("/betting/rules", response_class=HTMLResponse)
@@ -681,6 +685,16 @@ def save_betting_rules(
     except settings.SettingsError as e:
         return _render_betting(request, conn, errors=e.errors, status_code=400)
     return RedirectResponse("/betting?saved=rules#rules", status_code=303)
+
+
+@app.post("/betting/check")
+def check_bets(request: Request, bets: str = Form(""), conn: sqlite3.Connection = Depends(get_db)):
+    """The Bets section's "Check bets": settle the user's pending bets' games from Kalshi now."""
+    user = _require_user(request)
+    result = betting.check_bets(conn, user["id"])
+    shown = f"bets={quote(bets)}&" if bets in Betting.MODES else ""
+    return RedirectResponse(f"/betting?{shown}checked={result['checked']}&settled={result['settled']}"
+                            f"&failed={result['failed']}#bets", status_code=303)
 
 
 @app.post("/betting/weights/reset")

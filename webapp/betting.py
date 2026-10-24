@@ -316,5 +316,55 @@ def preview(conn: sqlite3.Connection, user_id: int, form: Mapping) -> dict:
     return {"backtest": backtest(conn, rules, effective), **_brier(conn, rules, effective)}
 
 
+def check_bets(conn: sqlite3.Connection, user_id: int, fetch_market=None) -> dict:
+    """
+    "Check bets": look up every one of the user's pending bets' games on
+    Kalshi now and record any that have finished -- the same settling the
+    daily run does, so it won't look those games up again. A market Kalshi
+    can't be reached for is skipped and counted.
+
+    Returns {"checked", "settled", "failed"}.
+    """
+    import Tracker
+
+    if fetch_market is None:
+        fetch_market = Kalshi.get_market
+    pending = [row[0] for row in conn.execute(
+        "SELECT DISTINCT b.ticker FROM bets b WHERE b.user_id = ? AND NOT EXISTS "
+        "(SELECT 1 FROM predictions p WHERE p.ticker = b.ticker AND p.outcome IS NOT NULL) ORDER BY b.ticker",
+        (user_id,))]
+    failed = []
+
+    def fetch(ticker):
+        try:
+            return fetch_market(ticker)
+        except Exception as e:  # one unreachable market mustn't stop the rest
+            print(f"could not check {ticker} on Kalshi: {e}")
+            failed.append(ticker)
+            return {}  # no result: left pending
+
+    settled = Tracker.settle_markets(conn, pending, fetch)
+    return {"checked": len(pending), "settled": len(settled), "failed": len(failed)}
+
+
+def check_flash(checked: Optional[str], settled: Optional[str], failed: Optional[str]) -> Optional[str]:
+    """The message after "Check bets", from its counts (query parameters, so strings)."""
+    if checked is None:
+        return None
+    try:
+        checked_n, settled_n, failed_n = int(checked), int(settled or 0), int(failed or 0)
+    except ValueError:
+        return None
+    if not checked_n:
+        return "No pending bets to check."
+    still = checked_n - settled_n - failed_n
+    parts = [f"Checked {checked_n} pending game{'' if checked_n == 1 else 's'} on Kalshi:",
+             f"{settled_n} finished" + ("" if not settled_n else " and recorded") + ",",
+             f"{still} still in progress or unsettled."]
+    if failed_n:
+        parts.append(f"{failed_n} couldn't be reached; try again shortly.")
+    return " ".join(parts)
+
+
 def flash(saved: Optional[str]) -> Optional[str]:
     return {"rules": "Rules saved.", "weights": "Back to the site's default AI weights."}.get(saved or "")

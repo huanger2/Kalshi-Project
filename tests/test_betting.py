@@ -1,5 +1,6 @@
 """Paper, demo and live betting per user (Betting.py), its hook in the daily run, and the Betting tab (webapp/betting.py)."""
 
+import datetime
 import json
 import os
 import shutil
@@ -270,6 +271,41 @@ class DailyRunBettingTests(DailyLogTestCase):
         finally:
             conn.close()
         self.assertAlmostEqual(confidence, (0.8 + 0.6 + 0.5) / 3)
+
+    def test_checking_bets_settles_them_and_the_next_daily_run_skips_them(self):
+        self.run_day(OCT4, TODAY_MARKETS[:2])  # bets on Denver
+        conn = Tracker.connect(self.db_path)
+        try:
+            looked_up = []
+
+            def fetch(ticker):
+                looked_up.append(ticker)
+                return {"result": "yes"}  # Denver won
+
+            self.assertEqual(betting.check_bets(conn, self.uid, fetch),
+                             {"checked": 1, "settled": 1, "failed": 0})
+            self.assertEqual(looked_up, ["KXNBAGAME-26OCT04UTADEN-DEN"])
+            self.assertEqual([b["status"] for b in betting.list_bets(conn, self.uid)], ["won"])
+            # Checking again finds nothing left to look up.
+            self.assertEqual(betting.check_bets(conn, self.uid, fetch)["checked"], 0)
+        finally:
+            conn.close()
+        # The next morning's run fills Oct 4's sheet from the recorded result: no Kalshi lookups for it.
+        with mock.patch("DailyLog.get_market", side_effect=AssertionError("looked up a settled game again")):
+            self.run_day(OCT4 + datetime.timedelta(days=1))
+        self.get_results.assert_not_called()
+        old_sheet = self.sheet(OCT4)
+        self.assertEqual((old_sheet.iloc[0]["winner"], int(old_sheet.iloc[0]["team_won"])), ("Denver", 1))
+
+    def test_a_market_that_cant_be_reached_is_counted_and_left_pending(self):
+        self.run_day(OCT4, TODAY_MARKETS[:2])
+        conn = Tracker.connect(self.db_path)
+        try:
+            result = betting.check_bets(conn, self.uid, mock.Mock(side_effect=OSError("timed out")))
+            self.assertEqual(result, {"checked": 1, "settled": 0, "failed": 1})
+            self.assertEqual([b["status"] for b in betting.list_bets(conn, self.uid)], ["pending"])
+        finally:
+            conn.close()
 
     def test_too_little_ai_confidence_means_no_bet(self):
         # LLMS say 80%, 60% and 50% confident: 63% averaged with equal weights.
@@ -683,6 +719,29 @@ class BettingPageTests(BettingConfigTestCase):
         strict = self.client.post("/betting/preview", data={**base, "min_confidence": "50"}).json()["rows_html"]
         self.assertNotEqual(strict, open_rows)
         self.assertNotIn("<td>1</td>", strict)
+
+    def test_the_check_bets_button(self):
+        _seed(self.db_path, [], bets=[("KXNBAGAME-26OCT04GGGHHH-GGG", "yes", 0.50, 10)], user_id=self.uid)
+        self.sign_in()
+        page = self.client.get("/betting").text  # GGG's game hasn't settled
+        self.assertIn('action="/betting/check"', page)
+        with mock.patch("Kalshi.get_market", return_value={"result": "no"}):
+            r = self.client.post("/betting/check", data={"bets": "paper"}, follow_redirects=False)
+        self.assertEqual(r.headers["location"], "/betting?bets=paper&checked=1&settled=1&failed=0#bets")
+        page = self.client.get(r.headers["location"]).text
+        self.assertIn("Checked 1 pending game on Kalshi: 1 finished and recorded", page)
+        self.assertNotIn('action="/betting/check"', page)  # nothing pending any more
+
+    def test_guests_cannot_check_bets(self):
+        self.client.post("/guest")
+        self.assertEqual(self.client.post("/betting/check").status_code, 403)
+
+    def test_check_flash_wording(self):
+        self.assertEqual(betting.check_flash("0", "0", "0"), "No pending bets to check.")
+        self.assertIn("2 still in progress", betting.check_flash("3", "1", "0"))
+        self.assertIn("1 couldn't be reached", betting.check_flash("3", "1", "1"))
+        self.assertIsNone(betting.check_flash(None, None, None))
+        self.assertIsNone(betting.check_flash("x", "1", "0"))
 
     def test_invalid_rules_save_nothing(self):
         self.sign_in()

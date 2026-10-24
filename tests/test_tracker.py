@@ -107,6 +107,24 @@ class RecordAndSettleTests(TrackerTestCase):
         self.assertEqual(Tracker.settle(self.conn, "G1", yes_won=False), 0)
         self.assertEqual(self.conn.execute("SELECT outcome FROM predictions").fetchone()[0], 1)
 
+    def test_settle_markets_settles_just_the_ones_given(self):
+        self.add("G1", "A", 0.7)
+        self.add("G2", "A", 0.7)
+        looked_up = []
+
+        def fetch(ticker):
+            looked_up.append(ticker)
+            return {"result": "yes"}
+
+        self.assertEqual(Tracker.settle_markets(self.conn, ["G1"], fetch), {"G1": True})
+        self.assertEqual(looked_up, ["G1"])
+        self.assertEqual(Tracker.known_outcomes(self.conn, ["G1", "G2"]), {"G1": (1, False)})
+
+    def test_a_market_still_open_stays_pending(self):
+        self.add("G1", "A", 0.7)
+        self.assertEqual(Tracker.settle_markets(self.conn, ["G1"], lambda t: {"result": ""}), {})
+        self.assertEqual(Tracker.known_outcomes(self.conn, ["G1"]), {})
+
     def test_unsettled_tickers(self):
         self.add("G1", "A", 0.7)
         self.add("G2", "A", 0.7)

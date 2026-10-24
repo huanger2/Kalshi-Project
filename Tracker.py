@@ -256,6 +256,17 @@ def settle(conn: sqlite3.Connection, ticker: str, yes_won: bool, tie: bool = Fal
     return cur.rowcount
 
 
+def known_outcomes(conn: sqlite3.Connection, tickers: list[str]) -> dict[str, tuple[int, bool]]:
+    """{ticker: (outcome, tied)} for those of `tickers` already settled in predictions."""
+    found = {}
+    for ticker in set(tickers):
+        row = conn.execute("SELECT MAX(outcome), MAX(tied) FROM predictions WHERE ticker = ? AND outcome IS NOT NULL",
+                           (ticker,)).fetchone()
+        if row and row[0] is not None:
+            found[ticker] = (row[0], bool(row[1]))
+    return found
+
+
 def unsettled_tickers(conn: sqlite3.Connection, before: Optional[str] = None) -> list[str]:
     """Tickers with no recorded outcome yet; `before` (ISO date) limits it to games played before that day."""
     sql = "SELECT DISTINCT ticker FROM predictions WHERE outcome IS NULL"
@@ -284,13 +295,30 @@ def settle_from_kalshi(
     Returns:
         {ticker: yes_won} for the markets that had settled (False for a tie).
     """
+    return settle_markets(conn, unsettled_tickers(conn, before=before), fetch_market)
+
+
+def settle_markets(
+    conn: sqlite3.Connection,
+    tickers: list[str],
+    fetch_market: Optional[Callable[[str], dict]] = None,
+) -> dict[str, bool]:
+    """
+    Look up each of `tickers` on Kalshi and record the ones that have
+    settled. The shared core of the daily run's backstop
+    (settle_from_kalshi()) and the Betting tab's "Check bets": either way
+    the outcome lands in predictions, so the other never looks it up again
+    (unsettled_tickers() skips it, and so does DailyLog.fill_results()).
+
+    Returns {ticker: yes_won} for the markets that had settled (False for a tie).
+    """
     if fetch_market is None:
         from Kalshi import get_market
         fetch_market = get_market
     from Kalshi import get_market_result, is_tie
 
     settled = {}
-    for ticker in unsettled_tickers(conn, before=before):
+    for ticker in tickers:
         market = fetch_market(ticker)
         tie = is_tie(market)
         result = False if tie else get_market_result(market)

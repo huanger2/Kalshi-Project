@@ -386,6 +386,12 @@ edge. As you edit any rule or weight, the **What if?** table and the AI
 odds' Brier score update to match (replayed on the server, nothing saved
 until you click Save).
 
+**Check bets** (above the bet list, while any are pending) asks Kalshi right
+away whether your pending bets' games have finished, instead of waiting for
+the next daily run. Results are recorded the same way the daily run records
+them, so the next run doesn't look those games up again: it fills their
+spreadsheet rows from the recorded result.
+
 Besides totals and the bet list, the tab shows:
 
 - **Balance over time**, a line chart under the totals. For demo and live
