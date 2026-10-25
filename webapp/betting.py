@@ -66,6 +66,8 @@ def list_bets(conn: sqlite3.Connection, user_id: int, mode: Optional[str] = None
             bet["ai_confidence"] = _confidence_from_predictions(conn, bet["ticker"], weights)
         bet.update(Betting.result(bet, row[-2], bool(row[-1])))
         bet["backing"] = bet["team"] if bet["side"] == "yes" else bet["opponent"]
+        # What the bet pays if it wins: $1 a contract (a tie pays half).
+        bet["payout_if_won"] = float(bet["count"])
         bets.append(bet)
     return bets
 

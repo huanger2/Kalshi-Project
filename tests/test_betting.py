@@ -701,6 +701,11 @@ class BettingViewTests(BettingConfigTestCase):
         # _seed's bets have no recorded confidence; GAMES' predictions are all 100% confident.
         self.assertEqual({b["ai_confidence"] for b in betting.list_bets(self.conn, self.uid)}, {1.0})
 
+    def test_each_bet_has_its_payout_if_won(self):
+        bets = {b["ticker"][-3:]: b for b in betting.list_bets(self.conn, self.uid)}
+        # $1 a contract, whether the bet won, lost or is still pending.
+        self.assertEqual({k: b["payout_if_won"] for k, b in bets.items()}, {"AAA": 8.0, "CCC": 8.0, "GGG": 10.0})
+
     def test_only_the_users_own_bets(self):
         other = Accounts.create_user(self.conn, "other", "password1")["id"]
         self.assertEqual(betting.list_bets(self.conn, other), [])
@@ -803,6 +808,8 @@ class BettingPageTests(BettingConfigTestCase):
         page = self.client.get("/betting")
         self.assertEqual(page.status_code, 200)
         self.assertIn("<th>AI confidence</th>", page.text)
+        self.assertIn(">Payout if won</th>", page.text)
+        self.assertIn("<td>$8.00</td>", page.text)  # the seeded bet: 8 contracts
         for text in ("Paper betting", "What if?", "Breakdowns", "Home vs Away", 'value="5"', "Save rules",
                      'name="segments" value="preseason" checked'):
             self.assertIn(text, page.text)

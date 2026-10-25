@@ -314,7 +314,8 @@
     <table>
         <thead><tr><th>Date</th><th>Game</th><th>Backing</th><th>Price</th><th>AI odds</th><th>AI confidence</th>
             <th title="The probability the bet was decided on">Fair odds</th><th>Edge</th>
-            <th>Cost</th><th>Result</th><th>P&amp;L</th></tr></thead>
+            <th>Cost</th><th>Result</th><th>P&amp;L</th>
+            <th title="What the bet pays if it wins: $1 a contract (a tie pays half)">Payout if won</th></tr></thead>
         <tbody>
             {% for bet in b.bets %}
             <tr>
@@ -330,6 +331,7 @@
                 <td>{{ money(bet.cost + bet.fee) }}</td>
                 <td><span class="pill {{ {'won': 'won', 'lost': 'lost', 'tie': 'neutral'}.get(bet.status, 'pending') }}">{{ bet.status | capitalize }}</span></td>
                 <td>{{ signed(bet.pnl) }}</td>
+                <td>{{ money(bet.payout_if_won) }}</td>
             </tr>
             {% endfor %}
         </tbody>
