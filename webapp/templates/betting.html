@@ -62,39 +62,56 @@
             <span class="sub">{{ s.won }} won, {{ s.lost }} lost</span></div>
     </div>
 
-    {% set chart = b.balance_chart %}
-    {% set is_pnl = chart.kind == "pnl" %}
+    {% set ch = b.charts %}
+    {% set account_name = "Kalshi demo" if b.shown == "demo" else "live Kalshi" %}
     <div class="chart-block" id="balance">
-        <h2 class="chart-title">{{ mode_names[b.shown] }} balance over time</h2>
-        <p class="chart-sub">
-            {% if chart.kind == "pnl" %}Paper bets have no account, so this is their running profit/loss from $0,
-                by game day, counting settled bets.
-            {% else %}Cash available in the {{ "Kalshi demo" if b.shown == "demo" else "live Kalshi" }} account, as
-                recorded after each daily run and when this page sees a new value.{% endif %}
-        </p>
-        {% if not chart.points %}
-            <p class="empty">{% if chart.kind == "pnl" %}Nothing to plot until a paper bet settles.
-                {% else %}No balance recorded yet: the next daily run, or opening this page in {{ mode_names[b.shown] | lower }} mode, records one.{% endif %}</p>
-        {% else %}
-        <figure class="line-chart" data-source="balance-data"
-                data-label="{{ mode_names[b.shown] }} balance over time, {{ chart.points | length }} points, latest {{ money(chart.points[-1].y) }}">
+        <div class="panel-head">
+            <div>
+                <h2 class="chart-title" data-series="profit">{{ mode_names[b.shown] }} profit over time</h2>
+                {% if ch.balance %}<h2 class="chart-title" data-series="balance" hidden>{{ mode_names[b.shown] }} balance over time</h2>{% endif %}
+            </div>
+            {% if ch.balance %}
+            <div class="theme-switch chart-switch" role="group" aria-label="What the chart shows">
+                <button type="button" data-chart-view="profit" aria-pressed="true">Profit</button>
+                <button type="button" data-chart-view="balance" aria-pressed="false">Balance</button>
+            </div>
+            {% endif %}
+        </div>
+        <p class="chart-sub" data-series="profit">Running profit/loss of your {{ {"paper": "paper", "demo": "Kalshi demo", "live": "live"}.get(b.shown, b.shown) }} bets from
+            $0, by game day, as they settle. Above the $0 line you're ahead.</p>
+        {% if ch.balance %}<p class="chart-sub" data-series="balance" hidden>Cash available in the {{ account_name }} account,
+            as recorded after each daily run and when this page sees a new value.</p>{% endif %}
+
+        {% if ch.profit.points or (ch.balance and ch.balance.points) %}
+        <figure class="line-chart" data-source="balance-data" data-default="profit"
+                data-label="{{ mode_names[b.shown] }} profit over time">
             <div class="chart-tooltip" hidden><span class="value"></span><span class="label"></span></div>
         </figure>
-        <script type="application/json" id="balance-data">{{ chart | tojson }}</script>
-        <details class="chart-table">
-            <summary>Show as a table</summary>
-            <div class="table-scroll">
-            <table>
-                <thead><tr><th>{{ "Game day" if is_pnl else "Recorded" }}</th><th>{{ "Net P&amp;L" if is_pnl else "Balance" }}</th></tr></thead>
-                <tbody>
-                    {% for p in chart.points | reverse %}
-                    <tr><td>{{ p.x | replace("T", " ") }}</td><td>{{ signed(p.y) if is_pnl else money(p.y) }}</td></tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-            </div>
-        </details>
+        <script type="application/json" id="balance-data">{{ ch | tojson }}</script>
         {% endif %}
+        {% for key, series in ch.items() if series %}
+        {% set is_pnl = series.kind == "pnl" %}
+        <div data-series="{{ key }}" {% if key != "profit" %}hidden{% endif %}>
+            {% if not series.points %}
+                <p class="empty">{% if is_pnl %}Nothing to plot until a bet settles.
+                    {% else %}No balance recorded yet: the next daily run, or opening this page in {{ mode_names[b.shown] | lower }} mode, records one.{% endif %}</p>
+            {% else %}
+            <details class="chart-table">
+                <summary>Show as a table</summary>
+                <div class="table-scroll">
+                <table>
+                    <thead><tr><th>{{ "Game day" if is_pnl else "Recorded" }}</th><th>{{ "Profit so far" if is_pnl else "Balance" }}</th></tr></thead>
+                    <tbody>
+                        {% for p in series.points | reverse %}
+                        <tr><td>{{ p.x | replace("T", " ") }}</td><td>{{ signed(p.y) if is_pnl else money(p.y) }}</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                </div>
+            </details>
+            {% endif %}
+        </div>
+        {% endfor %}
     </div>
 </section>
 

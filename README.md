@@ -427,10 +427,12 @@ spreadsheet rows from the recorded result.
 
 Besides totals and the bet list, the tab shows:
 
-- **Balance over time**, a line chart under the totals. For demo and live
-  it's the Kalshi account's cash balance, recorded after each daily run and
-  whenever the tab sees a new value. Paper bets have no account, so for them
-  it's the running profit/loss of settled bets from $0, by game day.
+- **Profit over time**, a line chart under the totals (the default view):
+  the running profit/loss of your completed bets from $0, by game day, with
+  a $0 line. Pending bets count for nothing until they settle. For demo and
+  live, a **Balance** switch shows the Kalshi account's cash balance
+  instead, recorded after each daily run and whenever the tab sees a new
+  value (it drops by what pending bets cost until they settle).
 
 - **What if?** replays the current rules over every settled game logged so
   far, at the prices when each was logged, for a range of minimum edges, so

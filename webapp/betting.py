@@ -149,11 +149,21 @@ def backtest(conn: sqlite3.Connection, config: dict, weights: Optional[dict] = N
     return rows
 
 
+def charts(conn: sqlite3.Connection, user_id: int, mode: str, bets: list[dict]) -> dict:
+    """
+    The Betting tab's chart, as {"profit": ..., "balance": ... or None}:
+    profit (the default view) for every mode, and the Kalshi account's
+    balance too for demo/live -- paper has no account.
+    """
+    return {"profit": profit_series(bets),
+            "balance": balance_series(conn, user_id, mode, bets) if mode in Betting.TRADING_MODES else None}
+
+
 def balance_series(conn: sqlite3.Connection, user_id: int, mode: str, bets: list[dict]) -> dict:
     """
-    The balance chart's line for `mode`. Demo/live: the Kalshi account's
-    recorded cash balance (balance_history). Paper has no account, so its
-    "balance" is the running total of settled P&L by game day, from $0.
+    The balance line for `mode`. Demo/live: the Kalshi account's recorded
+    cash balance (balance_history). Paper has no account, so its "balance"
+    is its profit (see profit_series()).
 
     Returns {"kind": "balance"/"pnl", "points": [{"x": ISO date or time, "y": dollars}]}.
     """
@@ -163,7 +173,19 @@ def balance_series(conn: sqlite3.Connection, user_id: int, mode: str, bets: list
             "ORDER BY recorded_at, id", (user_id, mode)
         ).fetchall()
         return {"kind": "balance", "points": [{"x": at, "y": round(balance, 2)} for at, balance in rows]}
+    return profit_series(bets)
 
+
+def profit_series(bets: list[dict]) -> dict:
+    """
+    The running total of profit/loss over these bets as they settled, by
+    game day, from $0: how the trades are doing as a whole. Completed bets
+    only -- a pending bet's stake is committed, not lost, so it counts for
+    nothing until its game settles (unlike the Kalshi balance, which drops
+    by it).
+
+    Returns {"kind": "pnl", "points": [{"x": ISO date, "y": dollars}]}.
+    """
     by_day: dict[str, float] = {}
     for bet in bets:
         if bet["status"] != "pending" and bet["game_date"]:
@@ -236,7 +258,7 @@ def view(conn: sqlite3.Connection, user: dict, shown: Optional[str] = None,
         "tabs": tabs,
         "account": acct,
         "keys": {env: Accounts.kalshi_key_info(conn, uid, env) is not None for env in Accounts.KALSHI_ENVS},
-        "balance_chart": balance_series(conn, uid, shown, bets),
+        "charts": charts(conn, uid, shown, bets),
         "leagues": list(Leagues.LEAGUES),
         "segments": Betting.SEGMENTS,
         "bets": bets[:200],

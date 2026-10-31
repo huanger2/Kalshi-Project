@@ -1113,18 +1113,33 @@ class BettingPageTests(BettingConfigTestCase):
         self.assertEqual(r.status_code, 200)
         self.assertIn("HTTP 401", r.text)
 
-    def test_the_balance_chart(self):
+    def test_the_chart_shows_profit_by_default(self):
         self.sign_in()
         page = self.client.get("/betting").text
-        self.assertIn("Paper balance over time", page)
-        self.assertIn('id="balance-data"', page)  # the one settled paper bet is a point
+        self.assertIn("Paper profit over time", page)
+        self.assertIn('data-default="profit"', page)
+        self.assertIn('"profit": {"kind": "pnl", "points": [{"x": "2026-10-04", "y": 3.06}]}', page)
         self.assertIn("/static/balance-chart.js", page)
+        self.assertNotIn('data-chart-view="balance"', page)  # paper has no account: no balance to switch to
+
+    def test_demo_and_live_can_switch_to_the_balance(self):
         _set_rules(self.db_path, self.uid, {**RULES, "mode": "demo"})
+        self.sign_in()
         with mock.patch.object(Accounts, "kalshi_credentials", side_effect=fake_credentials), \
              mock.patch("Kalshi.get_balance", return_value=250.5):
-            page = self.client.get("/betting").text  # this view records a first snapshot
+            page = self.client.get("/betting").text  # this view records a first balance snapshot
+        self.assertIn("Kalshi demo profit over time", page)
+        self.assertIn('data-chart-view="balance" aria-pressed="false"', page)
         self.assertIn("Kalshi demo balance over time", page)
         self.assertIn('"y": 250.5', page)
+
+    def test_profit_counts_only_completed_bets(self):
+        # A pending bet's stake is committed, not lost: it adds nothing until its game settles.
+        bets = [{"game_date": "2026-10-05", "status": "lost", "pnl": -5.0},
+                {"game_date": "2026-10-04", "status": "won", "pnl": 3.0},
+                {"game_date": "2026-10-06", "status": "pending", "pnl": None, "cost": 50.0, "fee": 0.5}]
+        self.assertEqual(betting.profit_series(bets)["points"],
+                         [{"x": "2026-10-04", "y": 3.0}, {"x": "2026-10-05", "y": -2.0}])
 
 
 class RepoConfigTests(unittest.TestCase):

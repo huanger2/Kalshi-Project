@@ -1,10 +1,13 @@
-// The Betting tab's balance-over-time line chart: plain SVG, sized to its
-// container and redrawn on resize. Colors come from CSS classes (style.css,
-// .line-chart), so the light/dark switch restyles it without a redraw.
+// The Betting tab's line chart: profit over time (the default, with a $0
+// line; completed bets only) or the Kalshi balance over time. Plain SVG,
+// sized to its container and redrawn on resize. Colors come from CSS
+// classes (style.css, .line-chart), so the light/dark switch restyles it
+// without a redraw.
 //
 // Data: a <script type="application/json"> named by the figure's
-// data-source, holding {"kind": "balance" | "pnl", "points": [{"x", "y"}]}
-// (webapp/betting.py balance_series()). x is an ISO date or date-time.
+// data-source, holding {"profit": series, "balance": series or null}
+// (webapp/betting.py charts()), each series {"kind": "pnl" | "balance",
+// "points": [{"x", "y"}]}. x is an ISO date or date-time.
 (function () {
     "use strict";
     var SVG = "http://www.w3.org/2000/svg";
@@ -66,11 +69,17 @@
                               "aria-label": figure.getAttribute("data-label") || "Line chart" });
         figure.insertBefore(svg, figure.firstChild);
 
-        // Gridlines and y tick labels (recessive), the $0 line a step stronger.
+        // Gridlines and y tick labels (recessive). Profit always gets its own $0 line, stronger,
+        // whatever the ticks: above it the trades are ahead, below it behind.
+        if (signed) {
+            var zy = Math.round(yAt(0)) + 0.5;
+            el("line", { x1: m.left, x2: m.left + w, y1: zy, y2: zy, "class": "zero" }, svg);
+        }
         for (var v = lo; v <= hi + step / 2; v += step) {
             var y = Math.round(yAt(v)) + 0.5;
-            el("line", { x1: m.left, x2: m.left + w, y1: y, y2: y,
-                         "class": signed && Math.abs(v) < step / 1e6 ? "zero" : "grid" }, svg);
+            if (!(signed && Math.abs(v) < step / 1e6)) {
+                el("line", { x1: m.left, x2: m.left + w, y1: y, y2: y, "class": "grid" }, svg);
+            }
             var label = el("text", { x: m.left - 8, y: y, "class": "tick", "text-anchor": "end",
                                      "dominant-baseline": "middle" }, svg);
             label.textContent = money(Math.abs(v) < step / 1e6 ? 0 : v, signed);
@@ -157,12 +166,47 @@
         });
     }
 
+    // The chart block can hold several views ({"profit": ..., "balance": ...}): a switch picks one,
+    // remembered per browser; elements marked data-series show only for the view picked.
+    var VIEW_KEY = "chartView";
+
     document.querySelectorAll("figure.line-chart[data-source]").forEach(function (figure) {
         var source = document.getElementById(figure.getAttribute("data-source"));
-        var data;
-        try { data = JSON.parse(source.textContent); } catch (e) { return; }
-        if (!data.points || !data.points.length) return;
-        var redraw = function () { draw(figure, data); };
+        var all;
+        try { all = JSON.parse(source.textContent); } catch (e) { return; }
+        if (all.points) all = { profit: all };  // a single series, not a set of views
+        var block = figure.closest(".chart-block") || document;
+        var view = figure.getAttribute("data-default") || "profit";
+        try {
+            var saved = localStorage.getItem(VIEW_KEY);
+            if (saved && all[saved]) view = saved;
+        } catch (e) {}
+
+        function show() {
+            var data = all[view];
+            block.querySelectorAll("[data-series]").forEach(function (el) {
+                el.hidden = el.getAttribute("data-series") !== view;
+            });
+            block.querySelectorAll("[data-chart-view]").forEach(function (b) {
+                b.setAttribute("aria-pressed", String(b.getAttribute("data-chart-view") === view));
+            });
+            var has = data && data.points && data.points.length;
+            figure.hidden = !has;
+            if (has) {
+                figure.setAttribute("data-label", (view === "profit" ? "Profit" : "Balance") + " over time, " +
+                    data.points.length + " points");
+                draw(figure, data);
+            }
+        }
+
+        block.querySelectorAll("[data-chart-view]").forEach(function (b) {
+            b.addEventListener("click", function () {
+                view = b.getAttribute("data-chart-view");
+                try { localStorage.setItem(VIEW_KEY, view); } catch (e) {}
+                show();
+            });
+        });
+        var redraw = show;
         redraw();
         if (window.ResizeObserver) {
             var lastWidth = figure.clientWidth;
