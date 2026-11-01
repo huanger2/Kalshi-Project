@@ -821,7 +821,8 @@ class BettingPageTests(BettingConfigTestCase):
         self.assertEqual(r.status_code, 303)
         self.assertEqual({k: self.rules()[k] for k in RULES}, {
             "mode": "paper", "min_edge": 0.075, "stake_usd": 10.0, "max_daily_usd": 100.0, "min_price": 0.15,
-            "max_price": 0.85, "min_ais": 3, "min_confidence": 0.0, "odds_model": "ai", "leagues": ["NBA", "NHL"],
+            "max_price": 0.85, "min_ais": 3, "min_confidence": 0.0, "odds_model": "ai", "loss_limit_usd": 0.0,
+            "leagues": ["NBA", "NHL"],
             "segments": ["regular", "postseason"]})
         self.assertIn("Rules saved.", self.client.get(r.headers["location"]).text)
 

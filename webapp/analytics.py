@@ -182,6 +182,7 @@ def apply(conn: sqlite3.Connection, user: dict, which: str) -> list[str]:
             "max_daily_usd": repr(merged["max_daily_usd"]), "min_ais": str(merged["min_ais"]),
             "min_confidence": repr(merged["min_confidence"] * 100),
             "odds_model": merged.get("odds_model", "fair"),
+            "loss_limit_usd": repr(merged.get("loss_limit_usd") or 0.0),
             "leagues": merged["leagues"], "segments": merged["segments"],
             # Applying rules never changes the mode, so a live user isn't asked to re-confirm.
             "confirm_live": "yes" if current["mode"] == "live" else "",

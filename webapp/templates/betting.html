@@ -37,6 +37,13 @@
         <p class="form-error" role="alert">Couldn't reach the {{ 'Kalshi demo' if a.mode == 'demo' else 'live Kalshi' }} account: {{ a.error }}</p>
     {% endif %}
     {% endif %}
+    {% set ll = b.loss_limit %}
+    {% if ll.hit %}
+        <p class="form-error" role="alert"><strong>Loss limit reached: no new bets.</strong> Your {{ mode_names[c.mode] | lower }}
+            bets lost {{ money(-ll.pnl) }} over the last {{ b.loss_limit_days }} days, against your
+            {{ money(ll.limit) }} limit. Bets already placed stand; betting resumes by itself once wins, or older losses
+            ageing out, bring it back under. <a href="#loss_limit_usd">Change the limit</a>.</p>
+    {% endif %}
     {% if b.tabs | length > 1 %}
     <nav class="mode-switch" aria-label="Whose bets to show">
         {% for m in b.tabs %}
@@ -60,6 +67,27 @@
             <span class="sub">P&amp;L / settled stake</span></div>
         <div class="stat"><span class="label">Win rate</span><span class="value">{{ pct(s.win_rate, 0) }}</span>
             <span class="sub">{{ s.won }} won, {{ s.lost }} lost</span></div>
+        {% set r = b.risk %}
+        {% if r %}
+        <div class="stat" title="The biggest drop in running profit from its high point, by game day">
+            <span class="label">Max drawdown</span>
+            <span class="value {{ 'edge-down' if r.max_drawdown > 0 }}">{{ money(-r.max_drawdown if r.max_drawdown else 0) }}</span>
+            <span class="sub">worst slide from a high</span></div>
+        <div class="stat"><span class="label">Streak</span>
+            <span class="value {{ {'won': 'edge-up', 'lost': 'edge-down'}.get(r.streak_status, '') }}">
+                {%- if r.streak_status %}{{ r.streak }} {{ "win" if r.streak_status == "won" else "loss" }}{{ "es" if r.streak_status == "lost" and r.streak != 1 else "s" if r.streak != 1 }}{% else %}&mdash;{% endif -%}
+            </span>
+            <span class="sub">in a row, latest bets</span></div>
+        <div class="stat"><span class="label">Best day</span>
+            <span class="value">{{ signed(r.best_day.pnl) }}</span><span class="sub">{{ r.best_day.day }}</span></div>
+        <div class="stat"><span class="label">Worst day</span>
+            <span class="value">{{ signed(r.worst_day.pnl) }}</span><span class="sub">{{ r.worst_day.day }}</span></div>
+        {% endif %}
+        {% if ll.limit and ll.pnl is not none %}
+        <div class="stat"><span class="label">Loss limit</span>
+            <span class="value {{ 'edge-down' if ll.hit }}">{{ money([ll.limit + [ll.pnl, 0] | min, 0] | max) }}</span>
+            <span class="sub">{{ "reached: paused" if ll.hit else "left over the last " ~ b.loss_limit_days ~ " days" }}</span></div>
+        {% endif %}
     </div>
 
     {% set ch = b.charts %}
@@ -193,6 +221,13 @@
             <input id="stake_usd" name="stake_usd" type="number" step="any" min="0.01" value="{{ c.stake_usd | num }}" required>
             <label for="max_daily_usd">Daily cap ($, incl. fees)</label>
             <input id="max_daily_usd" name="max_daily_usd" type="number" step="any" min="0" value="{{ c.max_daily_usd | num }}" required>
+            <label for="loss_limit_usd">Loss limit ($ per {{ b.loss_limit_days }} days)</label>
+            <div>
+                <input id="loss_limit_usd" name="loss_limit_usd" type="number" step="any" min="0"
+                       value="{{ (c.loss_limit_usd or 0) | num }}">
+                <span class="muted default-hint">No new bets while your settled bets in this mode have lost this much
+                    over the last {{ b.loss_limit_days }} days. 0 turns it off.</span>
+            </div>
             <label for="min_price">Lowest price (cents)</label>
             <input id="min_price" name="min_price" type="number" step="any" min="0" max="99" value="{{ (c.min_price * 100) | num }}" required>
             <label for="max_price">Highest price (cents)</label>
@@ -315,6 +350,9 @@
 <section class="panel" id="bets">
     <div class="panel-head">
         <h2>Bets</h2>
+        <div class="row-actions">
+        {% if s.bets %}<a class="button inline" href="/betting/bets.csv?bets={{ b.shown }}" download
+            title="Every {{ mode_names[b.shown] | lower }} bet as a spreadsheet (CSV)">Download CSV</a>{% endif %}
         {% if s.pending %}
         <form method="post" action="/betting/check">
             <input type="hidden" name="bets" value="{{ b.shown }}">
@@ -322,6 +360,7 @@
                 Check bets ({{ s.pending }} pending)</button>
         </form>
         {% endif %}
+        </div>
     </div>
     {% if checked %}<p class="form-message" role="status">{{ checked }}</p>{% endif %}
     {% if auto_settle.on %}

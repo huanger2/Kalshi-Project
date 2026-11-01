@@ -14,6 +14,8 @@ the balance chart. Paper, demo and live bets are shown one mode at a time,
 never added together.
 """
 
+import csv
+import io
 import sqlite3
 from typing import Mapping, Optional
 
@@ -91,6 +93,55 @@ def summarize(bets: list[dict]) -> dict:
         "roi": pnl / settled_outlay if settled_outlay else None,
         "win_rate": won / (won + lost) if won + lost else None,
     }
+
+
+def risk(bets: list[dict]) -> Optional[dict]:
+    """
+    How bumpy the ride has been, over settled bets (None before any settle):
+    the worst drop of the running profit from its high point (by game day,
+    from $0, like the profit chart), the current run of wins or losses
+    (newest bets first; a tie ends it), and the best and worst game days.
+
+    Returns {"max_drawdown", "streak_status", "streak", "best_day", "worst_day"},
+    each day as {"day", "pnl"}.
+    """
+    settled = [b for b in bets if b["status"] != "pending"]
+    if not settled:
+        return None
+    by_day: dict[str, float] = {}
+    for bet in settled:
+        by_day[bet["game_date"] or ""] = by_day.get(bet["game_date"] or "", 0.0) + bet["pnl"]
+    total = peak = drawdown = 0.0
+    for day in sorted(by_day):
+        total += by_day[day]
+        peak = max(peak, total)
+        drawdown = max(drawdown, peak - total)
+    newest = sorted(settled, key=lambda b: (b["game_date"] or "", b.get("id") or 0), reverse=True)
+    status, streak = newest[0]["status"], 0
+    for bet in newest:
+        if bet["status"] != status or status not in ("won", "lost"):
+            break
+        streak += 1
+    best = max(by_day.items(), key=lambda item: item[1])
+    worst = min(by_day.items(), key=lambda item: item[1])
+    return {"max_drawdown": round(drawdown, 2), "streak_status": status if streak else None, "streak": streak,
+            "best_day": {"day": best[0], "pnl": round(best[1], 2)},
+            "worst_day": {"day": worst[0], "pnl": round(worst[1], 2)}}
+
+
+CSV_COLUMNS = ["game_date", "created_at", "mode", "league", "ticker", "team", "opponent", "side", "backing",
+               "count", "price", "cost", "fee", "ai_prob", "ai_confidence", "model_prob", "edge", "status",
+               "payout", "pnl", "payout_if_won"]
+
+
+def bets_csv(bets: list[dict]) -> str:
+    """The bets as a CSV (every one, not just the page's latest 200), for a spreadsheet or tax records."""
+    out = io.StringIO()
+    writer = csv.DictWriter(out, fieldnames=CSV_COLUMNS, extrasaction="ignore", lineterminator="\n")
+    writer.writeheader()
+    for bet in bets:
+        writer.writerow({key: ("" if bet.get(key) is None else bet[key]) for key in CSV_COLUMNS})
+    return out.getvalue()
 
 
 def breakdowns(bets: list[dict]) -> list[dict]:
@@ -264,6 +315,9 @@ def view(conn: sqlite3.Connection, user: dict, shown: Optional[str] = None,
         "bets": bets[:200],
         "bet_total": len(bets),
         "summary": summarize(bets),
+        "risk": risk(bets),
+        "loss_limit": Betting.loss_limit(conn, uid, config),
+        "loss_limit_days": Betting.LOSS_LIMIT_DAYS,
         "breakdowns": breakdowns(bets),
         "backtest": backtest(conn, config, weights),
         "settled_games": settled_games,
@@ -309,6 +363,8 @@ def _parse(conn: sqlite3.Connection, user_id: int, form: Mapping, check_mode: bo
     # Optional in the form (older callers don't send it): blank means no minimum.
     min_confidence = (percent("min_confidence", "Minimum AI confidence (%)", 100)
                       if str(form.get("min_confidence", "")).strip() else 0.0)
+    loss_limit = (_number(form.get("loss_limit_usd", ""), "Loss limit", errors, maximum=1000000)
+                  if str(form.get("loss_limit_usd", "")).strip() else 0.0)
     if min_ais is not None and min_ais != int(min_ais):
         errors.append("AIs that must answer: must be a whole number.")
     if min_price is not None and max_price is not None and min_price > max_price:
@@ -330,7 +386,8 @@ def _parse(conn: sqlite3.Connection, user_id: int, form: Mapping, check_mode: bo
 
     rules = {"mode": mode, "min_edge": min_edge, "stake_usd": stake, "max_daily_usd": daily, "min_price": min_price,
              "max_price": max_price, "min_ais": int(min_ais), "min_confidence": min_confidence or 0.0,
-             "odds_model": odds_model, "leagues": leagues, "segments": segments}
+             "odds_model": odds_model, "loss_limit_usd": loss_limit or 0.0, "leagues": leagues,
+             "segments": segments}
     return rules, weights
 
 
@@ -446,7 +503,7 @@ def sticky(config: dict, weights: dict, form: Mapping) -> tuple[dict, dict]:
             return None
 
     for name, scale in (("min_edge", 100), ("min_price", 100), ("max_price", 100), ("min_confidence", 100),
-                        ("stake_usd", 1), ("max_daily_usd", 1), ("min_ais", 1)):
+                        ("stake_usd", 1), ("max_daily_usd", 1), ("min_ais", 1), ("loss_limit_usd", 1)):
         value = number(name, scale)
         if value is not None:
             shown[name] = int(value) if name == "min_ais" and value == int(value) else value

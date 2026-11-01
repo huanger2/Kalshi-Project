@@ -8,6 +8,7 @@ against Kalshi's price. See webapp/__init__.py for the bigger picture.
     (then open http://127.0.0.1:8000/)
 """
 
+import datetime
 import html
 import os
 import sqlite3
@@ -22,7 +23,7 @@ from urllib.parse import quote
 from starlette.background import BackgroundTask
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -698,6 +699,7 @@ def save_betting_rules(
     max_price: str = Form(""),
     min_ais: str = Form(""),
     min_confidence: str = Form(""),
+    loss_limit_usd: str = Form(""),
     odds_model: str = Form("fair"),
     leagues: list[str] = Form([]),
     segments: list[str] = Form([]),
@@ -711,7 +713,7 @@ def save_betting_rules(
     user = _require_user(request)
     form = {"mode": mode, "min_edge": min_edge, "stake_usd": stake_usd, "max_daily_usd": max_daily_usd,
             "min_price": min_price, "max_price": max_price, "min_ais": min_ais, "min_confidence": min_confidence,
-            "odds_model": odds_model, "leagues": leagues, "segments": segments, "confirm_live": confirm_live}
+            "loss_limit_usd": loss_limit_usd, "odds_model": odds_model, "leagues": leagues, "segments": segments, "confirm_live": confirm_live}
     for key, value in (("openai", weight_openai), ("claude", weight_claude), ("gemini", weight_gemini)):
         if value is not None:
             form[f"weight::{key}"] = value
@@ -724,6 +726,17 @@ def save_betting_rules(
         betting.apply_today(conn, user)
         return RedirectResponse("/betting?applied=1#rules", status_code=303)
     return RedirectResponse("/betting?saved=rules#rules", status_code=303)
+
+
+@app.get("/betting/bets.csv")
+def download_bets(request: Request, bets: Optional[str] = None, conn: sqlite3.Connection = Depends(get_db)):
+    """The signed-in user's bets as a CSV: one mode's (`bets`), or all of them."""
+    user = _require_user(request)
+    mode = bets if bets in Betting.MODES else None
+    body = betting.bets_csv(betting.list_bets(conn, user["id"], mode))
+    name = f"fantasia-{mode or 'all'}-bets-{datetime.date.today().isoformat()}.csv"
+    return Response(body, media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
 @app.post("/betting/check")

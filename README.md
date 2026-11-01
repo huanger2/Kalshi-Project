@@ -399,6 +399,13 @@ The side with the bigger edge gets a bet if all of these hold:
   from the season dates on the Settings tab) is ticked. Preseason is
   unticked by default.
 - the day's cap isn't used up
+- you're under your **loss limit**, if you set one: while your settled bets
+  in the current mode have lost that many dollars over the last 7 days, no
+  new bets are placed (bets already placed stand). Betting resumes by itself
+  once wins, or older losses dropping out of the 7 days, bring it back
+  under. A red notice at the top of the tab says when it's paused. 0 (the
+  default) turns it off. It's a safety net for live money, so the What if?
+  replay doesn't apply it.
 
 A bet buys as many whole contracts as the dollars-per-bet amount covers.
 When more games qualify in a day than the cap covers, the biggest edges get
@@ -446,6 +453,13 @@ Besides totals and the bet list, the tab shows:
   you can see which threshold would have paid. Each day's cap goes to that
   day's biggest edges, as in the daily run.
 - **Breakdowns** split your bets' results by league, side and edge.
+- **Risk stats** next to the totals: the **max drawdown** (the biggest drop
+  in running profit from a high point, by game day), your current **streak**
+  of wins or losses, and your **best and worst game days**. With a loss limit
+  set, a tile shows how much is left before it pauses betting.
+- **Download CSV** (above the bet list) saves every bet in the mode shown,
+  not just the latest 200 on the page, with its prices, AI odds, confidence,
+  edge, result and P&L, for a spreadsheet or tax records.
 
 Your rules are saved with your account. `betting.json` is only read once,
 to give the first admin the rules the site had before accounts existed.

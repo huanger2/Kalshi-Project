@@ -14,7 +14,9 @@ midpoint -- on each side of the market:
 The side with the bigger edge gets a bet if it clears that user's rules
 (see decide()). A bet buys as many whole contracts as stake_usd covers.
 When more games qualify in a day than max_daily_usd covers, the biggest
-edges get the money (see apply_daily_cap()).
+edges get the money (see apply_daily_cap()). A user's optional loss limit
+pauses new bets while their settled losses over the last week reach it
+(see loss_limit()).
 
 Each user's rules are their own (their "betting" setting, Accounts.py),
 and so is the mode, which says where their bets go:
@@ -69,9 +71,13 @@ DEFAULTS = {
     "min_ais": 2,
     "min_confidence": 0.0,  # the AIs' weighted average confidence (EVCalculator.consensus_confidence()), 0-1
     "odds_model": "fair",  # see ODDS_MODELS
+    "loss_limit_usd": 0.0,  # pause new bets once the last LOSS_LIMIT_DAYS' settled losses reach this; 0 = off
     "leagues": list(Leagues.LEAGUES),
     "segments": list(SEGMENTS),
 }
+
+# The loss limit looks back over this many game days, today included (see loss_limit()).
+LOSS_LIMIT_DAYS = 7
 
 # Kalshi's trading fee on most markets: 7% of C * P * (1 - P), rounded up to
 # the next cent per order (C contracts at price P in dollars). It peaks at
@@ -128,12 +134,52 @@ def bettor_for(conn: sqlite3.Connection, user: dict) -> tuple[Optional[dict], Op
         if creds is None:
             return None, f"{mode} mode, but no Kalshi {mode} key saved"
     weights = AIWeights.for_user(conn, user["id"])
+    paused = loss_limit(conn, user["id"], config)["why"]
+    if paused:
+        print(f"no new bets for {user['username']}: {paused}")
     fair_model = None
     if config.get("odds_model", "fair") == "fair":
         import FairOdds
         fair_model = FairOdds.model_for(conn, weights)
     return {"user_id": user["id"], "username": user["username"], "config": config,
-            "weights": weights, "creds": creds, "fair_model": fair_model}, None
+            "weights": weights, "creds": creds, "fair_model": fair_model, "paused": paused}, None
+
+
+def recent_pnl(conn: sqlite3.Connection, user_id: int, mode: str, today: Optional[datetime.date] = None,
+               days: int = LOSS_LIMIT_DAYS) -> float:
+    """Settled profit/loss of a user's `mode` bets on the last `days` game days (today included)."""
+    today = today or datetime.date.today()
+    since = (today - datetime.timedelta(days=days - 1)).isoformat()
+    total = 0.0
+    for side, count, cost, fee_, outcome, tied in conn.execute(
+            "SELECT b.side, b.count, b.cost, b.fee, "
+            "       (SELECT MAX(outcome) FROM predictions p WHERE p.ticker = b.ticker), "
+            "       (SELECT MAX(tied) FROM predictions p WHERE p.ticker = b.ticker) "
+            "FROM bets b WHERE b.user_id = ? AND b.mode = ? AND b.game_date >= ?", (user_id, mode, since)):
+        settled = result({"side": side, "count": count, "cost": cost, "fee": fee_}, outcome, bool(tied))
+        if settled["pnl"] is not None:
+            total += settled["pnl"]
+    return round(total, 2)
+
+
+def loss_limit(conn: sqlite3.Connection, user_id: int, config: dict,
+               today: Optional[datetime.date] = None) -> dict:
+    """
+    Where a user stands against their loss limit (the rules' loss_limit_usd,
+    0 = none) in their current mode: {"limit", "pnl" (settled P&L over the
+    last LOSS_LIMIT_DAYS game days), "hit", "why"}. While it's hit no new
+    bet is placed -- bets already placed stand -- until wins, or older
+    losses ageing out of the window, bring it back under.
+    """
+    limit = config.get("loss_limit_usd") or 0.0
+    mode = config.get("mode")
+    if limit <= 0 or mode not in MODES or mode == "off":
+        return {"limit": limit, "pnl": None, "hit": False, "why": None}
+    pnl = recent_pnl(conn, user_id, mode, today)
+    hit = pnl <= -limit + 1e-9
+    why = (f"loss limit reached: {mode} bets lost ${-pnl:.2f} over the last {LOSS_LIMIT_DAYS} days "
+           f"(limit ${limit:.2f})") if hit else None
+    return {"limit": limit, "pnl": pnl, "hit": hit, "why": why}
 
 
 # Kalshi market statuses that still take orders.
@@ -422,6 +468,10 @@ def candidate(
                     (ticker, mode, bettor["user_id"])).fetchone():
         if why is not None:
             why.append(f"already bet in {mode} mode")
+        return None
+    if bettor.get("paused"):
+        if why is not None:
+            why.append(bettor["paused"])
         return None
 
     league = Leagues.league_for_ticker(ticker)
