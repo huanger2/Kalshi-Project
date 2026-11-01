@@ -14,7 +14,7 @@ import sqlite3
 import sys
 import tempfile
 import traceback
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Iterator, Optional
 from urllib.parse import quote
@@ -33,11 +33,20 @@ import CostTracker
 import Leagues
 import Tracker
 from DailyLog import DEFAULT_LLM_NAMES
-from webapp import account, analytics, auth, betting, daily_run, data_files, queries, settings, suggestions, users
+from webapp import (account, analytics, auth, auto_settle, betting, daily_run, data_files, queries, settings,
+                    suggestions, users)
 
 HERE = Path(__file__).parent
 
-app = FastAPI(title="Fantasia")
+@asynccontextmanager
+async def _lifespan(app):
+    # Bets resolve on their own: results are looked up every AUTO_SETTLE_MINUTES (webapp/auto_settle.py).
+    auto_settle.start()
+    yield
+    auto_settle.stop()
+
+
+app = FastAPI(title="Fantasia", lifespan=_lifespan)
 app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
 templates = Jinja2Templates(directory=str(HERE / "templates"))
 
@@ -661,6 +670,7 @@ def _render_betting(request: Request, conn: sqlite3.Connection, saved: Optional[
         request, "betting.html",
         {"b": betting.view(conn, request.state.user, shown, submitted),
          "message": betting.flash(saved), "applied": applied, "checked": checked,
+         "auto_settle": auto_settle.summary(),
          "errors": errors or [], "ai_names": DEFAULT_LLM_NAMES, "active_tab": "betting"},
         status_code=status_code,
     )

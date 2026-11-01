@@ -324,6 +324,11 @@
         {% endif %}
     </div>
     {% if checked %}<p class="form-message" role="status">{{ checked }}</p>{% endif %}
+    {% if auto_settle.on %}
+    <p class="note auto-settle">Results are recorded automatically: finished games are looked up on Kalshi every
+        {{ auto_settle.minutes }} minutes{% if auto_settle.last_ago %} (last check {{ auto_settle.last_ago }}{% if auto_settle.settled %},
+        {{ auto_settle.settled }} newly settled{% endif %}){% endif %}. Check bets asks right away.</p>
+    {% endif %}
     {% if not s.bets %}
         <p class="empty">No {{ mode_names[b.shown] | lower }} bets yet{% if c.mode == b.shown %} -- the next daily run places them{% endif %}.</p>
     {% else %}

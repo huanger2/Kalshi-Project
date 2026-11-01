@@ -419,6 +419,13 @@ trading are skipped, games you've already bet are left as they are, and the
 AIs aren't asked again. Rules a choice of **Odds to bet on** doesn't use
 (the minimum edge, for Kalshi favorite) are hidden while it's chosen.
 
+**Results come in on their own.** The web service looks up every game from
+today or earlier that has no result yet on Kalshi's public market data every
+`AUTO_SETTLE_MINUTES` (default 15; `0` turns it off), and records the
+finished ones, so bets resolve without a click and without waiting for the
+next daily run. It records results the same way as the daily run, so neither
+looks a game up twice, and it skips a round while a daily run is going.
+
 **Check bets** (above the bet list, while any are pending) asks Kalshi right
 away whether your pending bets' games have finished, instead of waiting for
 the next daily run. Results are recorded the same way the daily run records

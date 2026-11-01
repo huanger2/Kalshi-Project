@@ -15,3 +15,7 @@ Kalshi.legacy_env_credentials = lambda env: None
 # Encrypting a Kalshi key would otherwise generate secrets.key in the
 # project folder (the data directory when DATA_DIR isn't set).
 os.environ.setdefault("SECRETS_KEY", "test-only-secrets-key")
+
+# The web service's background result checker (webapp/auto_settle.py) would
+# start whenever a test runs the app's startup; tests call settle_once() directly.
+os.environ["AUTO_SETTLE_MINUTES"] = "0"
