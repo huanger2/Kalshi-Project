@@ -102,6 +102,85 @@ def failing_espn(market):
 failing_espn.takes_market = True
 
 
+NOV5_DEN = "KXNBAGAME-26NOV05UTADEN-DEN"  # a regular-season game: Utah at Denver
+
+
+def finished_game_api(chart=None, reachable=True):
+    """ESPN's API after Nov 5's Utah at Denver: no predictor any more, just the win-probability chart."""
+    chart = chart if chart is not None else [{"homeWinPercentage": 0.64, "tiePercentage": 0.0},
+                                             {"homeWinPercentage": 0.61, "tiePercentage": 0.0}]
+    calls = []
+
+    def fetch(url, params):
+        calls.append(url)
+        if not reachable:
+            raise OSError("ESPN is down")
+        if url.endswith("/scoreboard"):
+            assert params == {"dates": "20261105"}, params
+            return {"events": [{"id": "501", "date": "2026-11-06T02:00Z", "competitions": [{"competitors": [
+                {"homeAway": "home", "team": {"abbreviation": "DEN"}},
+                {"homeAway": "away", "team": {"abbreviation": "UTAH"}}]}]}]}
+        return {"predictor": None, "winprobability": chart}
+
+    fetch.calls = calls
+    return fetch
+
+
+class BackfillTests(unittest.TestCase):
+    def setUp(self):
+        ESPN._scoreboards.clear()
+        self.addCleanup(ESPN._scoreboards.clear)
+        self.conn = Tracker.connect(":memory:")
+        self.addCleanup(self.conn.close)
+        from EVCalculator import LLMPrediction
+        for ticker, team, day, preds in (
+                (NOV5_DEN, "Denver", "2026-11-05", [LLMPrediction("OpenAI", 0.6, 0.4)]),
+                ("KXNHLGAME-26NOV05BOSNYR-BOS", "Boston", "2026-11-05", [LLMPrediction("OpenAI", 0.5, 0.4)]),
+                (DEN, "Denver", "2026-10-04", [LLMPrediction("OpenAI", 0.6, 0.4)]),  # preseason
+                ("KXNBAGAME-26NOV05GSWLAC-LAC", "Los Angeles C", "2026-11-05",
+                 [LLMPrediction("OpenAI", 0.5, 0.4), LLMPrediction("ESPN", 0.55, 0.5)])):  # already has ESPN
+            Tracker.record_predictions(self.conn, game_market(ticker, team), 0.61, preds, opponent="Utah",
+                                       yes_bid=0.6, yes_ask=0.62, game_date=day)
+        Tracker.settle(self.conn, NOV5_DEN, yes_won=True)
+
+    def espn_rows(self):
+        return self.conn.execute(
+            "SELECT ticker, predicted_prob, confidence, model, market_prob, yes_ask, game_date, outcome, created_at "
+            "FROM predictions WHERE llm = 'ESPN' ORDER BY ticker").fetchall()
+
+    def test_a_finished_game_uses_the_charts_opening_point(self):
+        market = {"ticker": NOV5_DEN, "event_ticker": NOV5_DEN.rsplit("-", 1)[0]}
+        self.assertAlmostEqual(ESPN.win_probability(market, finished_game_api()), 0.64)
+        ESPN._scoreboards.clear()
+        utah = {"ticker": "KXNBAGAME-26NOV05UTADEN-UTA", "event_ticker": market["event_ticker"]}
+        # The away side: what's left after the home side and a tie (NFL).
+        chart = [{"homeWinPercentage": 0.60, "tiePercentage": 0.02}]
+        self.assertAlmostEqual(ESPN.win_probability(utah, finished_game_api(chart)), 0.38)
+        ESPN._scoreboards.clear()
+        with self.assertRaises(ESPN.NoPrediction):
+            ESPN.win_probability(market, finished_game_api(chart=[]))
+
+    def test_fills_the_games_missing_espn_once(self):
+        fetch = finished_game_api()
+        logged_at = self.conn.execute("SELECT created_at FROM predictions WHERE ticker = ?", (NOV5_DEN,)).fetchone()[0]
+        result = ESPN.backfill(self.conn, fetch, sleep=lambda s: None)
+        self.assertEqual(result, {"added": 1, "missing": 0, "preseason": 1})
+        self.assertEqual(self.espn_rows()[0], ("KXNBAGAME-26NOV05GSWLAC-LAC", 0.55, 0.5, ESPN.MODEL, 0.61, 0.62,
+                                              "2026-11-05", None, self.espn_rows()[0][-1]))
+        # The new row sits with the game's others: same prices, outcome and logged time.
+        self.assertEqual(self.espn_rows()[1], (NOV5_DEN, 0.64, ESPN.CONFIDENCE, ESPN.MODEL, 0.61, 0.62,
+                                              "2026-11-05", 1, logged_at))
+        fetch.calls.clear()
+        self.assertEqual(ESPN.backfill(self.conn, fetch, sleep=lambda s: None)["added"], 0)
+        self.assertEqual(fetch.calls, [])  # nothing left to look up (NHL and preseason are never asked)
+
+    def test_espn_being_down_leaves_games_for_next_time(self):
+        with mock.patch("builtins.print"):
+            result = ESPN.backfill(self.conn, finished_game_api(reachable=False), sleep=lambda s: None)
+        self.assertEqual(result, {"added": 0, "missing": 1, "preseason": 1})
+        self.assertEqual(len(self.espn_rows()), 1)  # just the game that already had one
+
+
 class SourceTests(unittest.TestCase):
     def test_a_market_source_gets_the_market_not_a_prompt(self):
         with mock.patch("builtins.print"):
@@ -143,6 +222,13 @@ class DailyRunTests(unittest.TestCase):
         with mock.patch("builtins.print"):
             self.f.run_day(OCT4, TODAY_MARKETS[:2], llms=LLMS + [("ESPN", failing_espn)])
         self.assertEqual({row[0] for row in self.predictions()}, {"OpenAI", "Claude", "Gemini"})
+
+    def test_the_daily_run_backfills_espn_when_espn_is_a_source(self):
+        with mock.patch.object(ESPN, "backfill", return_value={"added": 0}) as backfill:
+            self.f.run_day(OCT4, TODAY_MARKETS[:2])
+            backfill.assert_not_called()  # tests' AIs only: ESPN isn't asked
+            self.f.run_day(OCT4, TODAY_MARKETS[:2], llms=LLMS + [("ESPN", fake_espn(0.7))])
+            backfill.assert_called_once()
 
     def test_pre_game_bettors_arent_bet_at_the_daily_run(self):
         self.f.set_rules(min_edge=0.02, bet_lead_minutes=60)

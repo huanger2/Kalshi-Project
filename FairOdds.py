@@ -238,7 +238,9 @@ _cache: dict = {}
 
 def _key(kind: str, weights: Optional[dict], games: list[dict]) -> tuple:
     settled = sum(1 for g in games if g.get("outcome") is not None)
-    return (kind, tuple(sorted((weights or {}).items())), len(games), settled,
+    # The prediction count too: a source added to games already logged (ESPN's backfill) changes the AI odds.
+    answers = sum(g.get("ai_count") or 0 for g in games)
+    return (kind, tuple(sorted((weights or {}).items())), len(games), settled, answers,
             max((g.get("game_date") or "" for g in games), default=""))
 
 

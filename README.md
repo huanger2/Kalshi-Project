@@ -65,6 +65,14 @@ optimizer.
   the dial.
 - A game is still only logged when at least one AI answers. ESPN alone
   doesn't count, so an AI outage leaves the game for the next run as before.
+- **Games logged before ESPN was added get it too.** Each daily run adds
+  ESPN's prediction to every logged NBA or NFL game that lacks one,
+  preseason aside. Locally, `py ESPN.py backfill` does the same. A finished
+  game's Matchup Predictor is gone, so its number comes from the opening
+  point of ESPN's win-probability chart. That's ESPN's pre-game number taken
+  at tip-off: over 123 NBA regular-season games it correlates 0.945 with
+  Kalshi's closing price. Preseason games are skipped because ESPN gives
+  every one the same 50.9%.
 
 ## Choosing the leagues
 

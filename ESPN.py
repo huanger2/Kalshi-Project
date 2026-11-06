@@ -10,6 +10,8 @@ it could change without notice).
   scoreboard  site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard?dates=YYYYMMDD
               each game's ESPN id, start time and teams
   summary     .../summary?event={id}  -> "predictor": each team's gameProjection (win %)
+              until the game starts; after that, "winprobability" -- ESPN's in-game
+              chart, whose first point (the opening play) carries its pre-game number
 
 A Kalshi market is matched to ESPN's game by its teams: the event ticker
 (KXNBAGAME-26NOV09SASPHX) names the day and both teams, the market ticker's
@@ -24,9 +26,21 @@ weight is the real dial.
 
 Start times come from the scoreboard too (start_time()), for betting a set
 time before each game (Betting.py, webapp/pregame.py).
+
+Games logged before ESPN was added (or when ESPN didn't answer) get their
+ESPN prediction afterwards from backfill(), which the daily run calls --
+also by hand: py ESPN.py backfill. A finished game's predictor is gone, so
+its number is the win-probability chart's opening point. That tracks the
+pre-game number closely (an NFL check: 56.8% at the opening play vs. 56.6%
+projected; over 123 NBA regular-season games it correlates 0.945 with
+Kalshi's closing price) but is taken at tip-off, a few hours later than a
+morning daily run would see it. Preseason games are skipped: ESPN doesn't
+rate preseason matchups (every one opens at the same 50.9%).
 """
 
 import datetime
+import sqlite3
+import sys
 import time
 from typing import Callable, Optional
 
@@ -155,10 +169,17 @@ def win_probability(market: dict, fetch: Callable = _get) -> float:
     predictor = summary.get("predictor") or {}
     side = predictor.get("homeTeam" if parsed["team_is_home"] else "awayTeam") or {}
     try:
-        projection = float(side["gameProjection"])
+        return max(0.0, min(1.0, float(side["gameProjection"]) / 100))
     except (KeyError, TypeError, ValueError):
+        pass
+    # Started or finished: the predictor is gone, but the win-probability chart opens on ESPN's number.
+    chart = summary.get("winprobability") or []
+    try:
+        home = float(chart[0]["homeWinPercentage"])
+        tie = float(chart[0].get("tiePercentage") or 0.0)
+    except (IndexError, KeyError, TypeError, ValueError):
         raise NoPrediction(f"ESPN has no matchup prediction for {market.get('event_ticker')} yet") from None
-    return max(0.0, min(1.0, projection / 100))
+    return max(0.0, min(1.0, home if parsed["team_is_home"] else 1 - home - tie))
 
 
 def ask_espn(market: dict) -> tuple[float, float]:
@@ -171,3 +192,64 @@ def ask_espn(market: dict) -> tuple[float, float]:
 
 
 ask_espn.takes_market = True
+
+SPACING_SECONDS = 0.1  # between ESPN lookups in backfill()
+
+
+def backfill(conn: sqlite3.Connection, fetch: Callable = _get, sleep=time.sleep) -> dict:
+    """
+    Add an ESPN prediction to every logged game in a predicted league (NBA,
+    NFL) that has none, preseason aside, copying the game's other columns
+    (logged time, prices, outcome) from its rows already there, so it sits
+    with the AIs' as if logged with them. Games ESPN can't place are left
+    for the next try. Returns {"added", "missing", "preseason"}.
+    """
+    import SeasonType
+
+    rows = conn.execute(
+        "SELECT ticker, MIN(rowid) FROM predictions GROUP BY ticker "
+        "HAVING SUM(llm = ?) = 0 ORDER BY MIN(game_date), ticker", (NAME,)).fetchall()
+    added = missing = preseason = 0
+    first = True
+    for ticker, rowid in rows:
+        (created_at, event_ticker, league, title, team, opponent, game_date, yes_bid, yes_ask, market_prob,
+         outcome, tied, settled_at) = conn.execute(
+            "SELECT created_at, event_ticker, league, title, team, opponent, game_date, yes_bid, yes_ask, "
+            "market_prob, outcome, tied, settled_at FROM predictions WHERE rowid = ?", (rowid,)).fetchone()
+        league = league or Leagues.league_for_ticker(ticker)
+        if league not in PREDICTOR_LEAGUES:
+            continue
+        if SeasonType.segment_iso(game_date, league) == "preseason":
+            preseason += 1
+            continue
+        if not first:
+            sleep(SPACING_SECONDS)
+        first = False
+        market = {"ticker": ticker, "event_ticker": event_ticker or ticker.rsplit("-", 1)[0]}
+        try:
+            prob = win_probability(market, fetch)
+        except Exception as e:  # NoPrediction, or ESPN unreachable: try again next time
+            print(f"ESPN backfill: nothing for {ticker}: {e}", flush=True)
+            missing += 1
+            continue
+        conn.execute(
+            "INSERT INTO predictions (created_at, ticker, event_ticker, league, title, team, opponent, game_date, "
+            " yes_bid, yes_ask, llm, model, predicted_prob, confidence, market_prob, outcome, tied, settled_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (created_at, ticker, event_ticker, league, title, team, opponent, game_date, yes_bid, yes_ask,
+             NAME, MODEL, prob, CONFIDENCE, market_prob, outcome, tied, settled_at))
+        conn.commit()
+        added += 1
+    return {"added": added, "missing": missing, "preseason": preseason}
+
+
+if __name__ == "__main__":
+    if sys.argv[1:2] != ["backfill"]:
+        sys.exit("usage: py ESPN.py backfill [path/to/predictions.db]")
+    import Tracker
+
+    db = Tracker.connect(*sys.argv[2:3])
+    try:
+        print(backfill(db))
+    finally:
+        db.close()

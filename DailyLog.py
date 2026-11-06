@@ -582,6 +582,17 @@ def run(
     except Exception as e:
         print(f"could not settle remaining games from Kalshi: {e}")
 
+    # ESPN's prediction for games logged without one (before it was added, or when ESPN didn't answer).
+    # Best-effort too: ESPN being down mustn't stop today's games being logged.
+    if any(name == "ESPN" for name, _ in llms):
+        try:
+            import ESPN
+            filled = ESPN.backfill(db_conn)
+            if filled["added"]:
+                print(f"added ESPN's prediction to {filled['added']} earlier game(s)")
+        except Exception as e:
+            print(f"could not backfill ESPN's predictions: {e}")
+
     path = path_for(today, folder)
     df = load(path)
     new_rows = todays_rows(today, set(df["event_ticker"].dropna()), llms, db_conn=db_conn, leagues=leagues)
