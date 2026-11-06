@@ -104,7 +104,7 @@ class SaveSectionTests(ConfigTestCase):
 
     def test_weights(self):
         settings.save_weights({"weight::openai": "0.5", "weight::claude": "2", "weight::gemini": "0"})
-        self.assertEqual(self.read("ai_weights.json")["weights"], {"openai": 0.5, "claude": 2.0, "gemini": 0.0})
+        self.assertEqual(self.read("ai_weights.json")["weights"], {"openai": 0.5, "claude": 2.0, "gemini": 0.0, "espn": 1.0})
 
     def test_bad_weights_are_rejected(self):
         for bad in ("-1", "11", "abc", "", "nan"):

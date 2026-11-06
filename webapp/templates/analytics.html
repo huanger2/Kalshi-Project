@@ -22,7 +22,7 @@
 {%- endmacro %}
 {% set segment_names = {"preseason": "Preseason", "regular": "Regular season", "postseason": "Postseason"} %}
 {% macro seg_list(segs) -%}{% for s in segs %}{{ segment_names[s] | lower }}{{ " and " if loop.revindex == 2 else ", " if not loop.last }}{% endfor %}{%- endmacro %}
-{% macro ai_name(key) -%}{{ "OpenAI" if key == "openai" else key | capitalize }}{%- endmacro %}
+{% macro ai_name(key) -%}{{ {"openai": "OpenAI", "espn": "ESPN"}.get(key, key | capitalize) }}{%- endmacro %}
 
 {% block content %}
 {% set run = a.run %}

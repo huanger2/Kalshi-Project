@@ -19,3 +19,5 @@ os.environ.setdefault("SECRETS_KEY", "test-only-secrets-key")
 # The web service's background result checker (webapp/auto_settle.py) would
 # start whenever a test runs the app's startup; tests call settle_once() directly.
 os.environ["AUTO_SETTLE_MINUTES"] = "0"
+# Likewise the pre-game betting rounds (webapp/pregame.py); tests call bet_once() directly.
+os.environ["PREGAME_CHECK_MINUTES"] = "0"

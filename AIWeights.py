@@ -33,6 +33,7 @@ DEFAULT_WEIGHTS = {
     "claude": 1.0,
     "openai": 1.0,
     "gemini": 1.0,
+    "espn": 1.0,  # not an AI: ESPN's own win probability (ESPN.py), weighted like one
 }
 
 

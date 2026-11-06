@@ -25,7 +25,7 @@ import Betting
 import Kalshi
 import Leagues
 from webapp import queries
-from webapp.settings import MAX_WEIGHT, PROVIDERS, SettingsError, _number
+from webapp.settings import MAX_WEIGHT, SOURCES, SettingsError, _number
 
 BACKTEST_EDGES = [0.0, 0.02, 0.04, 0.06, 0.08, 0.10, 0.15, 0.20]
 # Every edge falls in exactly one: Kalshi-favorite bets usually have a slightly negative one (the favorite's
@@ -318,11 +318,12 @@ def view(conn: sqlite3.Connection, user: dict, shown: Optional[str] = None,
         "risk": risk(bets),
         "loss_limit": Betting.loss_limit(conn, uid, config),
         "loss_limit_days": Betting.LOSS_LIMIT_DAYS,
+        "lead_choices": sorted(set(Betting.BET_LEAD_CHOICES) | {int(form_config.get("bet_lead_minutes") or 0)}),
         "breakdowns": breakdowns(bets),
         "backtest": backtest(conn, config, weights),
         "settled_games": settled_games,
         "providers": [{"key": key, "name": name, "weight": form_weights.get(key, 1.0),
-                       "default": AIWeights.defaults().get(key, 1.0)} for key, name in PROVIDERS],
+                       "default": AIWeights.defaults().get(key, 1.0)} for key, name in SOURCES],
         "custom_weights": Accounts.get_setting(conn, uid, "ai_weights") is not None,
         "weights_brier": _brier(conn, config, weights),
         "fair": fair_view(conn, weights),
@@ -365,6 +366,11 @@ def _parse(conn: sqlite3.Connection, user_id: int, form: Mapping, check_mode: bo
                       if str(form.get("min_confidence", "")).strip() else 0.0)
     loss_limit = (_number(form.get("loss_limit_usd", ""), "Loss limit", errors, maximum=1000000)
                   if str(form.get("loss_limit_usd", "")).strip() else 0.0)
+    # Optional too: blank means at the daily run.
+    lead = (_number(form.get("bet_lead_minutes", ""), "When to bet (minutes before tip-off)", errors,
+                    maximum=Betting.MAX_BET_LEAD) if str(form.get("bet_lead_minutes", "")).strip() else 0)
+    if lead is not None and lead != int(lead):
+        errors.append("When to bet: must be a whole number of minutes.")
     if min_ais is not None and min_ais != int(min_ais):
         errors.append("AIs that must answer: must be a whole number.")
     if min_price is not None and max_price is not None and min_price > max_price:
@@ -376,9 +382,12 @@ def _parse(conn: sqlite3.Connection, user_id: int, form: Mapping, check_mode: bo
         errors.append(f"Odds to bet on: {odds_model!r} isn't one of {', '.join(Betting.ODDS_MODELS)}.")
 
     weights = None
-    if any(f"weight::{key}" in form for key, _ in PROVIDERS):
-        weights = {key: _number(form.get(f"weight::{key}", ""), f"{name} weight", errors,
-                                maximum=MAX_WEIGHT, required=True) for key, name in PROVIDERS}
+    if any(f"weight::{key}" in form for key, _ in SOURCES):
+        # A source the form doesn't have a field for (a page loaded before it was added) keeps its weight.
+        current = AIWeights.for_user(conn, user_id)
+        weights = {key: (_number(form.get(f"weight::{key}", ""), f"{name} weight", errors,
+                                 maximum=MAX_WEIGHT, required=True)
+                         if f"weight::{key}" in form else current.get(key, 1.0)) for key, name in SOURCES}
         if not errors and not any(weights.values()):
             errors.append("At least one AI needs a weight above 0.")
     if errors:
@@ -386,8 +395,8 @@ def _parse(conn: sqlite3.Connection, user_id: int, form: Mapping, check_mode: bo
 
     rules = {"mode": mode, "min_edge": min_edge, "stake_usd": stake, "max_daily_usd": daily, "min_price": min_price,
              "max_price": max_price, "min_ais": int(min_ais), "min_confidence": min_confidence or 0.0,
-             "odds_model": odds_model, "loss_limit_usd": loss_limit or 0.0, "leagues": leagues,
-             "segments": segments}
+             "odds_model": odds_model, "loss_limit_usd": loss_limit or 0.0, "bet_lead_minutes": int(lead or 0),
+             "leagues": leagues, "segments": segments}
     return rules, weights
 
 
@@ -503,10 +512,12 @@ def sticky(config: dict, weights: dict, form: Mapping) -> tuple[dict, dict]:
             return None
 
     for name, scale in (("min_edge", 100), ("min_price", 100), ("max_price", 100), ("min_confidence", 100),
-                        ("stake_usd", 1), ("max_daily_usd", 1), ("min_ais", 1), ("loss_limit_usd", 1)):
+                        ("stake_usd", 1), ("max_daily_usd", 1), ("min_ais", 1), ("loss_limit_usd", 1),
+                        ("bet_lead_minutes", 1)):
         value = number(name, scale)
         if value is not None:
-            shown[name] = int(value) if name == "min_ais" and value == int(value) else value
+            whole = name in ("min_ais", "bet_lead_minutes") and value == int(value)
+            shown[name] = int(value) if whole else value
     for name in ("mode", "odds_model"):
         if form.get(name):
             shown[name] = form[name]
@@ -539,16 +550,20 @@ def applied_view(conn: sqlite3.Connection, user_id: int) -> Optional[dict]:
     if result.get("why"):
         return {"message": f"Rules saved. Nothing applied to today's games: {result['why']}.", "games": [],
                 "hint": None, "placed": 0}
-    games_n, placed_n = result["games"], result["placed"]
+    games_n, placed_n, waiting_n = result["games"], result["placed"], result.get("waiting", 0)
     message = (f"Rules saved and applied to today's {games_n} game{'' if games_n == 1 else 's'} "
                f"({result['day']}): {placed_n} new bet{'' if placed_n == 1 else 's'} placed.")
+    if waiting_n:
+        message += (f" {waiting_n} game{' is' if waiting_n == 1 else 's are'} waiting for your pre-game betting time"
+                    " and will be bet then, automatically.")
     hint = None
-    if not placed_n and result.get("odds_model") == "fair" and result.get("trusts_ais") is False:
+    if not placed_n and not waiting_n and result.get("odds_model") == "fair" and result.get("trusts_ais") is False:
         hint = ("You're betting on fair odds, and the fair-odds model doesn't trust the AIs yet, so fair odds equal "
                 "Kalshi's price and no game shows an edge. That's deliberate until the AIs prove themselves; to bet "
                 "now, choose Raw AI odds or Kalshi favorite under Odds to bet on.")
     # The per-game list starts open when nothing was placed: then the reasons are the point.
-    return {"message": message, "games": result.get("outcomes") or [], "hint": hint, "placed": placed_n}
+    return {"message": message, "games": result.get("outcomes") or [], "hint": hint,
+            "placed": placed_n + waiting_n}
 
 
 def flash(saved: Optional[str]) -> Optional[str]:

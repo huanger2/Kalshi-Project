@@ -18,6 +18,12 @@ edges get the money (see apply_daily_cap()). A user's optional loss limit
 pauses new bets while their settled losses over the last week reach it
 (see loss_limit()).
 
+When bets are placed is each user's choice too (bet_lead_minutes): at the
+daily run, with the AIs' answers (0, the default), or a set number of
+minutes before each game's tip-off, by the web service's pre-game rounds
+(webapp/pregame.py) -- Kalshi's price is a little sharper and cheaper by
+then, once the day's injury news is in (see README, "When to bet").
+
 Each user's rules are their own (their "betting" setting, Accounts.py),
 and so is the mode, which says where their bets go:
 
@@ -72,6 +78,7 @@ DEFAULTS = {
     "min_confidence": 0.0,  # the AIs' weighted average confidence (EVCalculator.consensus_confidence()), 0-1
     "odds_model": "fair",  # see ODDS_MODELS
     "loss_limit_usd": 0.0,  # pause new bets once the last LOSS_LIMIT_DAYS' settled losses reach this; 0 = off
+    "bet_lead_minutes": 0,  # 0: bet at the daily run; else this many minutes before each game's tip-off
     "leagues": list(Leagues.LEAGUES),
     "segments": list(SEGMENTS),
 }
@@ -185,6 +192,51 @@ def loss_limit(conn: sqlite3.Connection, user_id: int, config: dict,
 # Kalshi market statuses that still take orders.
 OPEN_STATUSES = {"open", "active", "initialized"}
 
+# The "When to bet" choices offered on the Betting tab (minutes before tip-off; 0 = at the daily run).
+BET_LEAD_CHOICES = [0, 15, 30, 60, 120]
+MAX_BET_LEAD = 720
+# Kalshi's game markets expect to expire this long after tip-off (true of 98% of NBA games), which gives
+# the start time when ESPN doesn't list a game.
+KALSHI_EXPIRY_AFTER_START = datetime.timedelta(hours=3)
+
+
+def tip_time(market: dict, espn_only: bool = False) -> Optional[datetime.datetime]:
+    """
+    When a game starts (aware, UTC): ESPN's start time, else -- unless
+    `espn_only`, for a market dict with no Kalshi fields yet -- Kalshi's
+    expected expiration less KALSHI_EXPIRY_AFTER_START. None if neither.
+    """
+    import ESPN
+
+    start = ESPN.start_time(market)
+    if start is not None or espn_only:
+        return start
+    expires = market.get("expected_expiration_time")
+    if not expires:
+        return None
+    return datetime.datetime.fromisoformat(expires.replace("Z", "+00:00")) - KALSHI_EXPIRY_AFTER_START
+
+
+def _in_words(delta: datetime.timedelta) -> str:
+    minutes = max(0, round(delta.total_seconds() / 60))
+    return f"{minutes} min" if minutes < 60 else f"{minutes // 60} h {minutes % 60:02d} min"
+
+
+def bet_timing(tip: Optional[datetime.datetime], lead_minutes: int, now: datetime.datetime) -> Optional[str]:
+    """
+    Why a game isn't to be bet yet (or any more) under a "minutes before
+    tip-off" rule, or None to bet it now. An unknown tip-off is bet now.
+    """
+    if not lead_minutes or tip is None:
+        return None
+    if now >= tip:
+        return "the game has already started"
+    opens = tip - datetime.timedelta(minutes=lead_minutes)
+    if now < opens:
+        return (f"waiting: bets go in {lead_minutes} min before tip-off, "
+                f"in about {_in_words(opens - now)}")
+    return None
+
 
 def latest_games(conn: sqlite3.Connection, today: Optional[datetime.date] = None) -> tuple[Optional[str], list[dict]]:
     """
@@ -211,7 +263,8 @@ def latest_games(conn: sqlite3.Connection, today: Optional[datetime.date] = None
 
 
 def rerun_today(conn: sqlite3.Connection, user: dict, fetch_market=None,
-                today: Optional[datetime.date] = None) -> dict:
+                today: Optional[datetime.date] = None, now: Optional[datetime.datetime] = None,
+                tip_for: Callable = tip_time) -> dict:
     """
     Apply a user's current rules to today's already-logged games now,
     instead of waiting for tomorrow's run: each game's market is fetched
@@ -221,15 +274,21 @@ def rerun_today(conn: sqlite3.Connection, user: dict, fetch_market=None,
     left alone, and the daily cap counts what's already been spent today.
     The AIs aren't asked again.
 
-    Returns {"day", "games", "placed", "already", "closed", "failed", "why",
-    "odds_model", "trusts_ais", "outcomes"}: "why" is set when nothing could
+    With the user's bet_lead_minutes set, only games starting within that
+    many minutes are bet (tip-offs from tip_for(); see bet_timing()): the
+    rest are counted as "waiting", or skipped once they've started. The
+    web service's pre-game rounds (webapp/pregame.py) call this every few
+    minutes for exactly that.
+
+    Returns {"day", "games", "placed", "already", "closed", "failed", "waiting",
+    "why", "odds_model", "trusts_ais", "outcomes"}: "why" is set when nothing could
     run (e.g. betting is off); "outcomes" is [{"game", "ticker", "outcome"}]
     -- what happened to each game, bet or not, in words.
     """
     import Kalshi
 
-    result = {"day": None, "games": 0, "placed": 0, "already": 0, "closed": 0, "failed": 0, "why": None,
-              "odds_model": None, "trusts_ais": None, "outcomes": []}
+    result = {"day": None, "games": 0, "placed": 0, "already": 0, "closed": 0, "failed": 0, "waiting": 0,
+              "why": None, "odds_model": None, "trusts_ais": None, "outcomes": []}
     bettor, why = bettor_for(conn, user)
     if bettor is None:
         result["why"] = why or "betting is off"
@@ -243,6 +302,8 @@ def rerun_today(conn: sqlite3.Connection, user: dict, fetch_market=None,
         return result
     fetch_market = fetch_market or Kalshi.get_market
     mode = bettor["config"]["mode"]
+    lead = int(bettor["config"].get("bet_lead_minutes") or 0)
+    now = now or datetime.datetime.now(datetime.timezone.utc)
     candidates = []
     outcomes: dict[str, str] = {}
     for game in games:
@@ -251,6 +312,13 @@ def rerun_today(conn: sqlite3.Connection, user: dict, fetch_market=None,
                         (ticker, mode, bettor["user_id"])).fetchone():
             result["already"] += 1
             outcomes[ticker] = f"already bet in {mode} mode (left as it is)"
+            continue
+        # ESPN's start time first, so a game that isn't due yet costs no Kalshi lookup.
+        tip = tip_for(game, espn_only=True) if lead else None
+        wait = bet_timing(tip, lead, now)
+        if wait:
+            result["waiting" if not wait.startswith("the game") else "closed"] += 1
+            outcomes[ticker] = wait
             continue
         try:
             market = fetch_market(ticker)
@@ -264,6 +332,12 @@ def rerun_today(conn: sqlite3.Connection, user: dict, fetch_market=None,
             result["closed"] += 1
             outcomes[ticker] = f"market no longer trading ({status})"
             continue
+        if lead and tip is None:
+            wait = bet_timing(tip_for(market), lead, now)
+            if wait:
+                result["waiting" if not wait.startswith("the game") else "closed"] += 1
+                outcomes[ticker] = wait
+                continue
         why: list = []
         bet = candidate(conn, bettor, {"ticker": ticker, "event_ticker": game["event_ticker"],
                                        "yes_sub_title": game["team"]},

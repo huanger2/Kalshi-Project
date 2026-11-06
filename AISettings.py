@@ -21,7 +21,10 @@ DEFAULT_MODELS = {
 
 
 def get_model(provider: str) -> str:
-    """Return the configured model for 'claude', 'openai' or 'gemini'."""
+    """Return the configured model for 'claude', 'openai' or 'gemini' ('espn' isn't configurable: see ESPN.py)."""
+    if provider == "espn":
+        import ESPN
+        return ESPN.MODEL
     if provider not in DEFAULT_MODELS:
         raise KeyError(f"Unknown AI provider {provider!r}; expected one of {sorted(DEFAULT_MODELS)}")
 

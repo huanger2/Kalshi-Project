@@ -2,8 +2,9 @@
 Probability.py
 
 Fetches a Kalshi market, queries OpenAI / Claude / Gemini for their
-probability and confidence on the YES outcome, then runs the EVCalculator
-to determine whether the market is worth betting on.
+probability and confidence on the YES outcome -- plus ESPN's own win
+probability (ESPN.py), logged next to them like a fourth AI -- then runs
+the EVCalculator to determine whether the market is worth betting on.
 """
 
 import re
@@ -74,17 +75,34 @@ def parse_response(response: str, llm_name: str) -> tuple[float, float]:
     return probability, confidence
 
 
-def default_llms() -> list[tuple[str, Callable[[str], str]]]:
-    """The (name, ask_function) pairs queried by default."""
+def default_llms() -> list[tuple[str, Callable]]:
+    """
+    The (name, ask_function) pairs queried by default: the AIs, which take
+    the prompt and reply in text, and ESPN, which takes the market itself
+    (see ask_source()).
+    """
     from OpenAi import ask_openai
     from ClaudeAi import ask_claude
     from Gemini import ask_gemini
+    from ESPN import ask_espn
 
     return [
         ("OpenAI", ask_openai),
         ("Claude", ask_claude),
         ("Gemini", ask_gemini),
+        ("ESPN", ask_espn),
     ]
+
+
+def ask_source(llm_name: str, ask_fn: Callable, market: dict, prompt: Optional[str] = None) -> tuple[float, float]:
+    """
+    One source's (probability, confidence) for a market. An AI gets the
+    prompt and its reply is parsed; a source marked `takes_market` (ESPN)
+    is handed the market and answers with the pair directly.
+    """
+    if getattr(ask_fn, "takes_market", False) is True:
+        return ask_fn(market)
+    return parse_response(ask_fn(prompt if prompt is not None else build_prompt(market)), llm_name)
 
 
 # ---------------------------------------------------------------------------
@@ -116,11 +134,15 @@ def query_llms(
 
     for llm_name, ask_fn in llms:
         try:
-            raw = ask_fn(prompt)
-            if verbose:
-                print(f"[{llm_name}] raw response:\n  {raw.strip()}\n")
-
-            prob, conf = parse_response(raw, llm_name)
+            if getattr(ask_fn, "takes_market", False) is True:
+                prob, conf = ask_fn(market)
+                if verbose:
+                    print(f"[{llm_name}] {prob:.1%}\n")
+            else:
+                raw = ask_fn(prompt)
+                if verbose:
+                    print(f"[{llm_name}] raw response:\n  {raw.strip()}\n")
+                prob, conf = parse_response(raw, llm_name)
             predictions.append(
                 LLMPrediction(
                     llm_name=llm_name,

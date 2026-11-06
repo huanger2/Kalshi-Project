@@ -187,7 +187,7 @@ class WeightsTests(AccountsDbTestCase):
     def test_a_user_overrides_only_what_they_set(self):
         uid = Accounts.create_user(self.conn, "pat", "a-good-password")["id"]
         with mock.patch.object(AIWeights, "get_weight", return_value=1.0):
-            self.assertEqual(AIWeights.for_user(self.conn, uid), {"claude": 1.0, "openai": 1.0, "gemini": 1.0})
+            self.assertEqual(AIWeights.for_user(self.conn, uid), {"claude": 1.0, "openai": 1.0, "gemini": 1.0, "espn": 1.0})
             Accounts.set_setting(self.conn, uid, "ai_weights", {"openai": 2.5})
             self.assertEqual(AIWeights.for_user(self.conn, uid)["openai"], 2.5)
             self.assertEqual(AIWeights.for_user(self.conn, None)["openai"], 1.0)  # a guest: the defaults

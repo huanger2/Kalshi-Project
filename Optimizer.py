@@ -96,6 +96,9 @@ def segment_counts(conn: sqlite3.Connection) -> dict[str, int]:
     return counts
 
 
+DISPLAY_NAMES = {"openai": "OpenAI", "espn": "ESPN"}  # names .capitalize() gets wrong
+
+
 def ai_names(games: list[dict]) -> list[str]:
     return sorted({llm for g in games for llm, _, _ in g["preds"]})
 
@@ -506,7 +509,7 @@ def confidence_returns(games: list[dict], weights: dict[str, float]) -> list[dic
 def source_scores(games: list[dict], weights: dict[str, float]) -> list[dict]:
     """Brier score of each AI alone, the weighted consensus and Kalshi's price, on the same games."""
     llms = ai_names(games)
-    rows = [{"label": f"{llm.capitalize() if llm != 'openai' else 'OpenAI'} alone",
+    rows = [{"label": f"{DISPLAY_NAMES.get(llm, llm.capitalize())} alone",
              "brier": brier(games, {o: (1.0 if o == llm else 0.0) for o in llms})} for llm in llms]
     rows.append({"label": "AI odds (your weights)", "brier": brier(games, weights)})
     rows.append({"label": "Kalshi price", "brier": market_brier(games)})

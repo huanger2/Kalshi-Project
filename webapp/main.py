@@ -34,7 +34,7 @@ import CostTracker
 import Leagues
 import Tracker
 from DailyLog import DEFAULT_LLM_NAMES
-from webapp import (account, analytics, auth, auto_settle, betting, daily_run, data_files, queries, settings,
+from webapp import (account, analytics, auth, auto_settle, betting, daily_run, data_files, pregame, queries, settings,
                     suggestions, users)
 
 HERE = Path(__file__).parent
@@ -43,8 +43,11 @@ HERE = Path(__file__).parent
 async def _lifespan(app):
     # Bets resolve on their own: results are looked up every AUTO_SETTLE_MINUTES (webapp/auto_settle.py).
     auto_settle.start()
+    # Users who bet shortly before tip-off are bet every PREGAME_CHECK_MINUTES (webapp/pregame.py).
+    pregame.start()
     yield
     auto_settle.stop()
+    pregame.stop()
 
 
 app = FastAPI(title="Fantasia", lifespan=_lifespan)
@@ -700,6 +703,7 @@ def save_betting_rules(
     min_ais: str = Form(""),
     min_confidence: str = Form(""),
     loss_limit_usd: str = Form(""),
+    bet_lead_minutes: str = Form(""),
     odds_model: str = Form("fair"),
     leagues: list[str] = Form([]),
     segments: list[str] = Form([]),
@@ -708,13 +712,15 @@ def save_betting_rules(
     weight_openai: Optional[str] = Form(None, alias="weight::openai"),
     weight_claude: Optional[str] = Form(None, alias="weight::claude"),
     weight_gemini: Optional[str] = Form(None, alias="weight::gemini"),
+    weight_espn: Optional[str] = Form(None, alias="weight::espn"),
     conn: sqlite3.Connection = Depends(get_db),
 ):
     user = _require_user(request)
     form = {"mode": mode, "min_edge": min_edge, "stake_usd": stake_usd, "max_daily_usd": max_daily_usd,
             "min_price": min_price, "max_price": max_price, "min_ais": min_ais, "min_confidence": min_confidence,
-            "loss_limit_usd": loss_limit_usd, "odds_model": odds_model, "leagues": leagues, "segments": segments, "confirm_live": confirm_live}
-    for key, value in (("openai", weight_openai), ("claude", weight_claude), ("gemini", weight_gemini)):
+            "loss_limit_usd": loss_limit_usd, "bet_lead_minutes": bet_lead_minutes, "odds_model": odds_model, "leagues": leagues, "segments": segments, "confirm_live": confirm_live}
+    for key, value in (("openai", weight_openai), ("claude", weight_claude), ("gemini", weight_gemini),
+                       ("espn", weight_espn)):
         if value is not None:
             form[f"weight::{key}"] = value
     try:

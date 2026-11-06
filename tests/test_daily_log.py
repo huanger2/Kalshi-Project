@@ -400,7 +400,7 @@ class BackfillLayoutRegressionTests(DailyLogTestCase):
 
         wb = openpyxl.load_workbook(self.path)
         groups = [v for v in [c.value for c in wb["Daily log"][1]] if v]
-        self.assertEqual(groups, ["Game", "Kalshi odds", "OpenAI", "Claude", "Gemini", "Result", "Details"])
+        self.assertEqual(groups, ["Game", "Kalshi odds", "OpenAI", "Claude", "Gemini", "ESPN", "Result", "Details"])
         self.assertNotIn("Other", groups)
 
 

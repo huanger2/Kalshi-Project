@@ -1,8 +1,9 @@
 {
-    "_comment": "Each AI's weight in the 'AI odds' consensus: 1.0 each is equal weighting, 0 leaves an AI out. Also editable on the Settings tab.",
+    "_comment": "Each AI's weight in the 'AI odds' consensus (plus ESPN's win probability, weighted like an AI): 1.0 each is equal weighting, 0 leaves one out. Also editable on the Settings tab.",
     "weights": {
         "openai": 1.0,
         "claude": 1.0,
-        "gemini": 1.0
+        "gemini": 1.0,
+        "espn": 1.0
     }
 }

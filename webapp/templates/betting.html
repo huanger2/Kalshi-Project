@@ -26,6 +26,8 @@
         {% elif c.mode == "live" %}<strong>Each daily run places real-money orders on Kalshi</strong> for every game
             where the AI odds beat the price by {{ edge_text }} points or more.
         {% else %}Betting is off: the daily run logs games without recording bets.{% endif %}
+        {% if c.mode != "off" and c.bet_lead_minutes %}Bets go in about {{ c.bet_lead_minutes }} minutes before
+            each game's tip-off, at Kalshi's price then, rather than at the daily run.{% endif %}
         {% if c.mode in ["demo", "live"] %}Orders are immediate-or-cancel at the checked price or better, so a
             price that has moved away gets a partial fill or none.{% endif %}
     </p>
@@ -221,6 +223,20 @@
             <input id="stake_usd" name="stake_usd" type="number" step="any" min="0.01" value="{{ c.stake_usd | num }}" required>
             <label for="max_daily_usd">Daily cap ($, incl. fees)</label>
             <input id="max_daily_usd" name="max_daily_usd" type="number" step="any" min="0" value="{{ c.max_daily_usd | num }}" required>
+            <label for="bet_lead_minutes">When to bet</label>
+            <div>
+                <select id="bet_lead_minutes" name="bet_lead_minutes" class="settings-select">
+                    {% for m in b.lead_choices %}
+                    <option value="{{ m }}" {% if m == (c.bet_lead_minutes or 0) %}selected{% endif %}>
+                        {%- if m == 0 %}At the daily run (morning, when the AIs are asked)
+                        {%- else %}{{ m }} minutes before each game's tip-off{% if m == 60 %} (recommended){% endif %}{% endif -%}
+                    </option>
+                    {% endfor %}
+                </select>
+                <span class="muted default-hint">Kalshi's price is a little sharper and cheaper close to tip-off, once
+                    the day's injury news is in. Pre-game bets are placed by the web service, checking every few
+                    minutes; when the daily cap can't cover every game, earlier games get it first.</span>
+            </div>
             <label for="loss_limit_usd">Loss limit ($ per {{ b.loss_limit_days }} days)</label>
             <div>
                 <input id="loss_limit_usd" name="loss_limit_usd" type="number" step="any" min="0"

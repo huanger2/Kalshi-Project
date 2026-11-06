@@ -44,6 +44,28 @@ Each AI's model is set in [`ai_settings.json`](ai_settings.json):
 Edits take effect on the next call. A provider left out of the file uses the
 default in [`AISettings.py`](AISettings.py).
 
+### ESPN, a fourth source
+
+Next to the three AIs, every game also gets **ESPN's own win probability**:
+the Matchup Predictor on ESPN's game pages, from its BPI model (NBA) and FPI
+model (NFL). See [`ESPN.py`](ESPN.py). It's logged, weighted and shown just
+like an AI: its own columns in the daily spreadsheet, an **ESPN** tab next
+to the AI tabs, a weight with the AI weights (on the Betting tab, and the
+site default on Admin), and a place in the AI odds and the Analytics
+optimizer.
+
+- It's free and needs no key. It reads ESPN's public site API, the JSON
+  behind espn.com. That API is undocumented, so ESPN could change it
+  without notice. If it stops answering, games are still logged with the
+  AIs alone.
+- ESPN has no predictor for NHL or MLB, so those games have no ESPN number.
+- ESPN doesn't rate its confidence, so its predictions are logged at a fixed
+  50% (`ESPN.CONFIDENCE`). The AIs' own ratings average 24-50%, so at equal
+  weights ESPN counts about as much as the most confident AI. Its weight is
+  the dial.
+- A game is still only logged when at least one AI answers. ESPN alone
+  doesn't count, so an AI outage leaves the game for the next run as before.
+
 ## Choosing the leagues
 
 Which leagues get logged each day is set in [`leagues.json`](leagues.json):
@@ -183,7 +205,7 @@ bets) is the **AI confidence**: each AI's own confidence rating, averaged
 by the same AI weights, so you can see how sure the AIs were, not just
 what they said.
 
-The markets table's "AI odds" column combines the 3 AIs' predictions for a
+The markets table's "AI odds" column combines the AIs' (and ESPN's) predictions for a
 game into one number -- not a bare average, but each one weighted by its own
 confidence and its AI's weight, same `p_i` / `c_i` / `w_i` vocabulary as
 [`EVCalculator.py`](EVCalculator.py)'s EV score:
@@ -406,6 +428,7 @@ The side with the bigger edge gets a bet if all of these hold:
   under. A red notice at the top of the tab says when it's paused. 0 (the
   default) turns it off. It's a safety net for live money, so the What if?
   replay doesn't apply it.
+- it's time to bet, under your **When to bet** rule (see below)
 
 A bet buys as many whole contracts as the dollars-per-bet amount covers.
 When more games qualify in a day than the cap covers, the biggest edges get
@@ -463,6 +486,46 @@ Besides totals and the bet list, the tab shows:
 
 Your rules are saved with your account. `betting.json` is only read once,
 to give the first admin the rules the site had before accounts existed.
+
+#### When to bet
+
+**When to bet** picks when your bets are placed. Either at the daily run in
+the morning (the default), or a set number of minutes before each game's
+tip-off (15, 30, 60 or 120; 60 is recommended).
+
+The daily run still logs the games and asks the AIs in the morning. With a
+pre-game time set, the web service checks every `PREGAME_CHECK_MINUTES`
+(default 5; `0` turns it off), see
+[`webapp/pregame.py`](webapp/pregame.py). Each game starting within your
+time is priced fresh from Kalshi and bet under your rules, at most once.
+Tip-off times come from ESPN's scoreboard, or from Kalshi's expected
+expiration less 3 hours when ESPN doesn't list a game. A game that has
+started isn't bet. When the daily cap can't cover every game, earlier games
+get it first, not the biggest edges.
+
+**Save and apply to today's games** follows the same rule: games not due yet
+are listed as waiting, and are bet automatically when their time comes.
+
+Why: a replay of all 1,635 NBA games Kalshi settled from the 2025-26 season
+to November 2026 (hourly prices from 30 hours before each tip-off):
+
+| Regular season, 1,353 games | 9am ET | 3pm ET | 1h before | 30 min before |
+|---|---|---|---|---|
+| Kalshi's price, Brier score (lower = sharper) | 0.1964 | 0.1947 | 0.1949 | 0.1948 |
+| Buying the favorite: cost vs. the closing price | 0.80¢ | 0.68¢ | 0.58¢ | 0.54¢ |
+| Bid-ask spread | 1.12¢ | 1.09¢ | 1.07¢ | 1.07¢ |
+| Favorite's price moved 0.5¢+ by tip-off | 84% of games | 71% | 57% | 41% |
+
+- The price gets sharper through the day, mostly once the afternoon injury
+  reports are in. Buying close to tip-off costs a little less too. The
+  morning's price doesn't systematically favor either side: the favorite
+  firmed up and weakened about equally often (42% each).
+- Timing is a small effect. It's about 0.25¢ a contract, roughly 0.4% of
+  the stake. Backing the favorite lost money at every hour (about −3% ROI,
+  close to Kalshi's fee), so no time of day makes it profitable.
+- A fresh bet always looks about 3-4% down in Kalshi's portfolio right
+  away, before anything happens. Kalshi values it at the bid, not what you
+  paid, and the fee is already spent. That isn't the odds moving.
 
 ### Analytics tab
 
@@ -741,6 +804,7 @@ day's run catches it up.
 | `Kalshi.py` | Kalshi API: markets, prices, today's games, current odds, results (any league) |
 | `Leagues.py`, `leagues.json` | The tracked leagues: Kalshi series, season calendars, which ones are enabled |
 | `ClaudeAi.py`, `OpenAi.py`, `Gemini.py` | One wrapper per AI API |
+| `ESPN.py` | ESPN's Matchup Predictor win probability (logged as a fourth source), and game start times |
 | `AISettings.py`, `ai_settings.json` | Which model each AI uses |
 | `Accounts.py` | Users, their own settings (betting rules, AI weights) and encrypted Kalshi keys; the first admin |
 | `FairOdds.py` | The fair-odds model bets are decided on: Kalshi's price moved by the AIs' proven surprise |

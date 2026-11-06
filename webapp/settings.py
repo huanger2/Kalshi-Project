@@ -23,7 +23,9 @@ from typing import Mapping, Optional
 import ConfigFiles
 import DataDir
 
-PROVIDERS = [("openai", "OpenAI"), ("claude", "Claude"), ("gemini", "Gemini")]
+PROVIDERS = [("openai", "OpenAI"), ("claude", "Claude"), ("gemini", "Gemini")]  # the AIs: each has a model
+# Everything weighted in the AI odds: the AIs, plus ESPN's win probability (no model to pick).
+SOURCES = PROVIDERS + [("espn", "ESPN")]
 MAX_WEIGHT = 10.0
 
 
@@ -90,6 +92,7 @@ def view(today: Optional[datetime.date] = None) -> dict:
                   for section, path in files.items()},
         "providers": [{"key": key, "name": name, "model": AISettings.get_model(key),
                        "weight": AIWeights.get_weight(key)} for key, name in PROVIDERS],
+        "sources": [{"key": key, "name": name, "weight": AIWeights.get_weight(key)} for key, name in SOURCES],
         "pricing": [{"model": model, "input": (prices or {}).get("input_per_million"),
                      "output": (prices or {}).get("output_per_million")}
                     for model, prices in sorted(pricing.items())],
@@ -150,9 +153,13 @@ def save_models(form: Mapping[str, str]) -> None:
 
 
 def save_weights(form: Mapping[str, str]) -> None:
+    import AIWeights
+
     errors: list[str] = []
-    weights = {key: _number(form.get(f"weight::{key}", ""), f"{name} weight", errors,
-                            maximum=MAX_WEIGHT, required=True) for key, name in PROVIDERS}
+    # A source the form doesn't have a field for (a page loaded before it was added) keeps its weight.
+    weights = {key: (_number(form.get(f"weight::{key}", ""), f"{name} weight", errors,
+                             maximum=MAX_WEIGHT, required=True)
+                     if f"weight::{key}" in form else AIWeights.get_weight(key)) for key, name in SOURCES}
     if errors:
         raise SettingsError(errors)
     path = paths()["weights"]

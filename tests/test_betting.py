@@ -821,7 +821,7 @@ class BettingPageTests(BettingConfigTestCase):
         self.assertEqual(r.status_code, 303)
         self.assertEqual({k: self.rules()[k] for k in RULES}, {
             "mode": "paper", "min_edge": 0.075, "stake_usd": 10.0, "max_daily_usd": 100.0, "min_price": 0.15,
-            "max_price": 0.85, "min_ais": 3, "min_confidence": 0.0, "odds_model": "ai", "loss_limit_usd": 0.0,
+            "max_price": 0.85, "min_ais": 3, "min_confidence": 0.0, "odds_model": "ai", "loss_limit_usd": 0.0, "bet_lead_minutes": 0,
             "leagues": ["NBA", "NHL"],
             "segments": ["regular", "postseason"]})
         self.assertIn("Rules saved.", self.client.get(r.headers["location"]).text)
@@ -843,7 +843,7 @@ class BettingPageTests(BettingConfigTestCase):
         conn = Tracker.connect(self.db_path)
         try:
             self.assertEqual(Accounts.get_setting(conn, self.uid, "ai_weights"),
-                             {"openai": 2.0, "claude": 1.0, "gemini": 0.5})
+                             {"openai": 2.0, "claude": 1.0, "gemini": 0.5, "espn": 1.0})
         finally:
             conn.close()
         page = self.client.get("/betting").text
@@ -869,7 +869,7 @@ class BettingPageTests(BettingConfigTestCase):
     def test_all_zero_weights_are_refused(self):
         self.sign_in()
         r = self.client.post("/betting/rules", data=self.valid_form(**{"weight::openai": "0", "weight::claude": "0",
-                                                                      "weight::gemini": "0"}))
+                                                                      "weight::gemini": "0", "weight::espn": "0"}))
         self.assertEqual(r.status_code, 400)
         self.assertIn("At least one AI", r.text)
 

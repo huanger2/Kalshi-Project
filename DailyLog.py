@@ -55,10 +55,11 @@ import Leagues
 import Tracker
 from AISettings import get_model
 from Kalshi import get_market, get_prices, get_results, get_todays_games, implied_yes_prob
-from Probability import build_prompt, default_llms, parse_response, query_llms
+from Probability import ask_source, default_llms, query_llms
 
 DEFAULT_DIR = DataDir.data_path("daily_logs")
-DEFAULT_LLM_NAMES = ["OpenAI", "Claude", "Gemini"]
+# The AIs, then ESPN's own win probability (ESPN.py), which is logged and weighted just like them.
+DEFAULT_LLM_NAMES = ["OpenAI", "Claude", "Gemini", "ESPN"]
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +103,17 @@ def column_spec(llm_names: list[str]) -> list[Column]:
     ]
     for name in llm_names:
         key = name.lower()
+        if key == "espn":
+            spec += [
+                Column("espn_prob", "ESPN win %", name, "ESPN",
+                       "ESPN's Matchup Predictor (its BPI model for NBA, FPI for NFL): the chance Team wins. "
+                       "Blank for leagues ESPN doesn't predict (NHL, MLB).", PERCENT),
+                Column("espn_confidence", "ESPN confidence", name, "ESPN",
+                       "ESPN gives no confidence of its own, so this is always the fixed value in ESPN.py.",
+                       PERCENT),
+                Column("espn_model", "ESPN model", name, "ESPN", "Where ESPN's number came from."),
+            ]
+            continue
         spec += [
             Column(f"{key}_prob", f"{name} win %", name, name,
                    f"{name}'s estimate of the chance Team wins (model set in ai_settings.json).", PERCENT),
@@ -364,6 +376,8 @@ def todays_rows(
         except Exception as e:
             print(f"no bets today: could not read the betting rules: {e}")
     bets: dict[int, list[dict]] = {b["user_id"]: [] for b in bettors}
+    # Users who bet shortly before each tip-off instead are bet by the web service (webapp/pregame.py).
+    at_run = [b for b in bettors if not b["config"].get("bet_lead_minutes")]
 
     rows = []
     for event, markets in games.items():
@@ -375,8 +389,10 @@ def todays_rows(
             continue
 
         predictions = query_llms(market, llms, verbose=False)
-        if not predictions:
-            # Leave it unlogged so the next run tries again.
+        # ESPN (a source that takes the market, not a prompt) answering alone doesn't count: a game every
+        # AI failed on is left unlogged so the next run tries again, rather than logged with the AIs blank.
+        ai_names = {name for name, fn in llms if getattr(fn, "takes_market", False) is not True}
+        if not predictions or (ai_names and not any(p.llm_name in ai_names for p in predictions)):
             print(f"skipped {event}: every AI query failed")
             continue
 
@@ -414,7 +430,7 @@ def todays_rows(
                 print(f"could not record {event} in predictions.db: {e}")
             # Bets, per user -- best-effort too: a betting problem mustn't
             # cost the game its spreadsheet row or its predictions.
-            for bettor in bettors:
+            for bettor in at_run:
                 try:
                     bet = Betting.candidate(db_conn, bettor, market, predictions, prices, today.isoformat(),
                                             opponent=opponent)
@@ -485,8 +501,7 @@ def backfill_missing_predictions(
         for idx in targets:
             ticker = df.at[idx, "ticker"]
             try:
-                prompt = build_prompt(fetch_market(ticker))
-                prob, conf = parse_response(ask_fn(prompt), llm_name)
+                prob, conf = ask_source(llm_name, ask_fn, fetch_market(ticker))
             except Exception as e:
                 print(f"[{llm_name}] could not backfill {ticker}: {e}")
                 continue
